@@ -113,6 +113,8 @@ every response body fully read.
 
 ### Throughput comparison (requests/second)
 
+Read more details at: [Wiki - Performance Benchmark](https://github.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/wiki/Performance-Benchmark)
+
 | Concurrent clients | Portable server | IIS (1 worker) |
 |---:|---:|---:|
 | 1   | 3,346  | 2,825  |
