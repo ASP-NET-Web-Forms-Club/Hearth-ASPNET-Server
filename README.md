@@ -95,6 +95,8 @@ msbuild HearthPortableWebServer.sln /p:Configuration=Release
 
 ## Performance & load testing
 
+Read more details report at: [Wiki - Performance Benchmark](https://github.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/wiki/Performance-Benchmark)
+
 The **same ASP.NET Web Forms application** was load-tested twice on the **same
 machine** — once hosted by this portable server, once by the Windows 11 built-in
 **IIS** (single worker process) — using `HearthPortableWebServer.StressTest`. Each run
@@ -112,8 +114,6 @@ every response body fully read.
 | OS | Windows 11 |
 
 ### Throughput comparison (requests/second)
-
-Read more details at: [Wiki - Performance Benchmark](https://github.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/wiki/Performance-Benchmark)
 
 | Concurrent clients | Portable server | IIS (1 worker) |
 |---:|---:|---:|
