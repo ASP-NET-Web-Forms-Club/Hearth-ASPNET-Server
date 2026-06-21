@@ -1,0 +1,69 @@
+# ==========================================================================
+#  HearthPortableWebServer - .gitignore
+#  .NET Framework 4.8 / C# 7.3 solution (MSBuild, Visual Studio)
+# ==========================================================================
+
+# --- Build output -------------------------------------------------------
+# Shared output folder used by Common / Hosting / Host / Launcher.
+build/
+# Per-project output (StressTest) and MSBuild intermediates.
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+*.dll
+*.exe
+*.pdb
+
+# --- Visual Studio / IDE ------------------------------------------------
+.vs/
+*.suo
+*.user
+*.userprefs
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+# Rider / ReSharper
+.idea/
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# --- NuGet --------------------------------------------------------------
+packages/
+*.nupkg
+*.snupkg
+.nuget/
+project.lock.json
+
+# --- MCP2 edit backups (timestamped *.bak next to edited files) ---------
+*.bak
+backups/
+
+# --- Generated at runtime ----------------------------------------------
+# Stress-test reports (full results live on the project wiki, not in git).
+stress-logs/
+# Host / command run logs.
+*.log
+mcp_debug.log
+# Service configuration written by --install (lives next to the exe).
+server.config
+# Demo site auto-generated into a web root on first run.
+#   (Uncomment / adjust if you keep a real wwwroot under source control.)
+# wwwroot/
+
+# --- Test / coverage ----------------------------------------------------
+TestResults/
+[Tt]est[Rr]esult*/
+*.coverage
+*.coveragexml
+
+# --- OS / misc ----------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+*.tmp
+*.cache
