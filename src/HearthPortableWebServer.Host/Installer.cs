@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Diagnostics;
+using System.IO;
 using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using HearthPortableWebServer.Common;
 
 namespace HearthPortableWebServer.Host
@@ -23,11 +26,12 @@ namespace HearthPortableWebServer.Host
 
             // binPath value must be: "<exe>" --service   (inner quotes escaped for sc)
             string binValue = "\\\"" + exe + "\\\" --service";
+            string serviceName = IpcNames.ServiceName(port);
             string createArgs =
-                "create " + IpcNames.ServiceName +
+                "create " + serviceName +
                 " binPath= \"" + binValue + "\"" +
                 " start= auto" +
-                " DisplayName= \"" + IpcNames.ServiceDisplayName + "\"";
+                " DisplayName= \"" + IpcNames.ServiceDisplayName(port) + "\"";
 
             int rc = RunSc(createArgs);
             if (rc != 0)
@@ -36,22 +40,69 @@ namespace HearthPortableWebServer.Host
                 return rc;
             }
 
-            RunSc("description " + IpcNames.ServiceName + " \"" + IpcNames.ServiceDescription + "\"");
-            Console.WriteLine("Service '" + IpcNames.ServiceName + "' installed (auto-start, port " + port + ").");
+            RunSc("description " + serviceName + " \"" + IpcNames.ServiceDescription + "\"");
+
+            // The service runs as LocalSystem, so files it writes would otherwise be
+            // owned by SYSTEM and read-only to the interactive user. Grant Authenticated
+            // Users full (Modify) access on the web root, inherited by all current and
+            // future files/subfolders, so the logged-in user can freely read/write/delete
+            // whatever the web app creates. To lock this down, an administrator can change
+            // the service Log On account AND tighten this folder's permissions.
+            GrantAuthenticatedUsersWrite(normalizedRoot);
+
+            Console.WriteLine("Service '" + serviceName + "' installed (auto-start, port " + port + ").");
+            Console.WriteLine("Web root '" + normalizedRoot + "' is writable by authenticated users.");
             return 0;
         }
 
-        public static int Uninstall()
+        public static int Uninstall(int port)
         {
-            RunSc("stop " + IpcNames.ServiceName);
-            int rc = RunSc("delete " + IpcNames.ServiceName);
+            string serviceName = IpcNames.ServiceName(port);
+            RunSc("stop " + serviceName);
+            int rc = RunSc("delete " + serviceName);
             if (rc != 0)
             {
                 Console.Error.WriteLine("sc delete failed (exit " + rc + "). Run as Administrator.");
                 return rc;
             }
-            Console.WriteLine("Service '" + IpcNames.ServiceName + "' uninstalled.");
+            Console.WriteLine("Service '" + serviceName + "' uninstalled.");
             return 0;
+        }
+
+        /// <summary>
+        /// Grants "Authenticated Users" Modify rights on the web root, inheritable by all
+        /// files and subfolders, so files written by the LocalSystem service remain fully
+        /// accessible to the interactive user. Uses the well-known SID (not the localized
+        /// account name) so it works on non-English Windows. Best-effort: a failure here
+        /// is logged but does not fail the install.
+        /// </summary>
+        private static void GrantAuthenticatedUsersWrite(string root)
+        {
+            try
+            {
+                Directory.CreateDirectory(root);
+
+                SecurityIdentifier authUsers = new SecurityIdentifier(
+                    WellKnownSidType.AuthenticatedUserSid, null);
+
+                FileSystemAccessRule rule = new FileSystemAccessRule(
+                    authUsers,
+                    FileSystemRights.Modify | FileSystemRights.Synchronize,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow);
+
+                DirectoryInfo info = new DirectoryInfo(root);
+                DirectorySecurity security = info.GetAccessControl();
+                security.AddAccessRule(rule);
+                info.SetAccessControl(security);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    "Warning: could not set web-root permissions (" + ex.Message + "). " +
+                    "Files created by the service may be read-only to your user account.");
+            }
         }
 
         private static string ExecutablePath()

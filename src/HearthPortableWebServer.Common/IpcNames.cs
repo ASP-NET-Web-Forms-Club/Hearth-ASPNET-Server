@@ -32,10 +32,22 @@ namespace HearthPortableWebServer.Common
             return ReadyEventPrefix + port.ToString(CultureInfo.InvariantCulture);
         }
 
-        /// <summary>Fixed name of the optional Windows Service.</summary>
-        public const string ServiceName = "HearthPortableWebServer";
+        /// <summary>
+        /// Name of the Windows Service for a given port. Port-based so multiple copies of
+        /// the server (in different folders, on different ports) can each install their
+        /// own service without name collisions.
+        /// </summary>
+        public static string ServiceName(int port)
+        {
+            return "HearthPortableWebServer_Port" + port.ToString(CultureInfo.InvariantCulture);
+        }
 
-        public const string ServiceDisplayName = "Hearth Portable ASP.NET Web Server";
+        /// <summary>Human-readable service name shown in services.msc, per port.</summary>
+        public static string ServiceDisplayName(int port)
+        {
+            return "Hearth Portable ASP.NET Web Server (port "
+                + port.ToString(CultureInfo.InvariantCulture) + ")";
+        }
 
         public const string ServiceDescription =
             "Self-hosted, IIS-equivalent worker process for ASP.NET Web Forms applications.";

@@ -15,12 +15,13 @@ namespace HearthPortableWebServer.Launcher
     /// </summary>
     internal static class ServiceManager
     {
-        public static bool ServiceExists()
+        public static bool ServiceExists(int port)
         {
+            string target = IpcNames.ServiceName(port);
             ServiceController[] services = ServiceController.GetServices();
             for (int i = 0; i < services.Length; i++)
             {
-                bool match = string.Equals(services[i].ServiceName, IpcNames.ServiceName,
+                bool match = string.Equals(services[i].ServiceName, target,
                     StringComparison.OrdinalIgnoreCase);
                 services[i].Dispose();
                 if (match)
@@ -31,15 +32,15 @@ namespace HearthPortableWebServer.Launcher
             return false;
         }
 
-        public static string ServiceStatusText()
+        public static string ServiceStatusText(int port)
         {
             try
             {
-                if (!ServiceExists())
+                if (!ServiceExists(port))
                 {
                     return "Not installed";
                 }
-                using (ServiceController sc = new ServiceController(IpcNames.ServiceName))
+                using (ServiceController sc = new ServiceController(IpcNames.ServiceName(port)))
                 {
                     return "Installed - " + sc.Status.ToString();
                 }
@@ -64,20 +65,23 @@ namespace HearthPortableWebServer.Launcher
             return RunElevated(exe, args);
         }
 
-        public static bool Uninstall()
+        public static bool Uninstall(int port)
         {
             string exe = HostProcessManager.HostExePath();
-            return RunElevated(exe, "--uninstall");
+            // Pass the port explicitly so the Host removes the matching port-based service,
+            // rather than relying on whatever is currently in server.config.
+            string args = "--uninstall --port " + port.ToString(CultureInfo.InvariantCulture);
+            return RunElevated(exe, args);
         }
 
-        public static bool StartService()
+        public static bool StartService(int port)
         {
-            return RunElevated("sc.exe", "start " + IpcNames.ServiceName);
+            return RunElevated("sc.exe", "start " + IpcNames.ServiceName(port));
         }
 
-        public static bool StopService()
+        public static bool StopService(int port)
         {
-            return RunElevated("sc.exe", "stop " + IpcNames.ServiceName);
+            return RunElevated("sc.exe", "stop " + IpcNames.ServiceName(port));
         }
 
         /// <summary>

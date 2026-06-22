@@ -15,7 +15,7 @@ namespace HearthPortableWebServer.Host
 
         public WebServerService(int port, string root)
         {
-            ServiceName = IpcNames.ServiceName;
+            ServiceName = IpcNames.ServiceName(port);
             CanStop = true;
             CanShutdown = true;
             AutoLog = true;

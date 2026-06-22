@@ -52,8 +52,7 @@ namespace HearthPortableWebServer.StressTest
             sb.AppendLine(" Target URL : " + options.Url);
             sb.AppendLine(" Duration   : " + options.DurationSeconds.ToString(Inv) + " s measured per level (warmup "
                           + options.WarmupSeconds.ToString(Inv) + " s)");
-            sb.AppendLine(" Machine    : " + Environment.MachineName + ", "
-                          + Environment.ProcessorCount.ToString(Inv) + " logical CPUs, "
+            sb.AppendLine(" Machine    : " + Environment.ProcessorCount.ToString(Inv) + " logical CPUs, "
                           + (Environment.Is64BitProcess ? "x64" : "x86") + " test client");
             sb.AppendLine(thin);
             sb.AppendLine();

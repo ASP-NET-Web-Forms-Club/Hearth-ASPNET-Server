@@ -24,7 +24,6 @@ namespace HearthPortableWebServer.Host
             Root = NormalizeRoot(root);
 
             Directory.CreateDirectory(Root);
-            SampleSite.EnsureContent(Root);
             DeployHostingAssembly(Root);
 
             // Creating the application host spins up a dedicated ASP.NET AppDomain

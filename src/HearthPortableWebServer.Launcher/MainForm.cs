@@ -7,9 +7,8 @@ namespace HearthPortableWebServer.Launcher
 {
     public partial class MainForm : Form
     {
-        // True once this UI instance has started the server, so we know whether to
-        // prompt about it when the window is closed.
-        private bool _serverStartedHere;
+        // Persisted launcher state (port, web root, service name) stored next to the exe.
+        private LauncherSettings _settings = new LauncherSettings();
 
         public MainForm()
         {
@@ -28,10 +27,21 @@ namespace HearthPortableWebServer.Launcher
 
         private void MainForm_Load(object sender, EventArgs e)
         {
-            // Default web root = "<application startup path>\wwwroot".
-            txtRoot.Text = Path.Combine(Application.StartupPath, "wwwroot");
+            // Restore persisted state. Port and web root come from Settings.txt next to
+            // the exe; the stored root is relative and resolved to an absolute path here.
+            _settings = LauncherSettings.Load();
+            numPort.Value = ClampToRange(_settings.Port, (int)numPort.Minimum, (int)numPort.Maximum);
+            txtRoot.Text = _settings.ResolveRootAbsolute();
+
             statusTimer.Start();
             RefreshStatus();
+        }
+
+        private static int ClampToRange(int value, int min, int max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
         }
 
         private void btnBrowse_Click(object sender, EventArgs e)
@@ -62,7 +72,13 @@ namespace HearthPortableWebServer.Launcher
                 }
 
                 HostProcessManager.StartServer(Port, Root);
-                _serverStartedHere = true;
+
+                // Persist the port and (relativized) web root the user actually launched
+                // with, so reopening the launcher re-attaches to this same server.
+                _settings.Port = Port;
+                _settings.SetRootFromAbsolute(Root);
+                _settings.Save();
+
                 SetStatus("Starting server on port " + Port + " ...", Color.DarkGoldenrod);
             }
             catch (Exception ex)
@@ -121,6 +137,15 @@ namespace HearthPortableWebServer.Launcher
             }
 
             bool ok = ServiceManager.Install(Port, Root);
+            if (ok)
+            {
+                // Record the port, web root, and service name used for this install so a
+                // later uninstall (Stage 2: port-based names) can target the right one.
+                _settings.Port = Port;
+                _settings.SetRootFromAbsolute(Root);
+                _settings.ServiceName = HearthPortableWebServer.Common.IpcNames.ServiceName(Port);
+                _settings.Save();
+            }
             MessageBox.Show(this,
                 ok ? "Service installed. It will auto-start with Windows." : "Service installation did not complete.",
                 "Hearth Portable ASP.NET Web Server", MessageBoxButtons.OK,
@@ -130,7 +155,13 @@ namespace HearthPortableWebServer.Launcher
 
         private void btnUninstall_Click(object sender, EventArgs e)
         {
-            bool ok = ServiceManager.Uninstall();
+            bool ok = ServiceManager.Uninstall(Port);
+            if (ok)
+            {
+                // Clear the recorded service name now that it's gone.
+                _settings.ServiceName = string.Empty;
+                _settings.Save();
+            }
             MessageBox.Show(this,
                 ok ? "Service uninstalled." : "Service removal did not complete.",
                 "Hearth Portable ASP.NET Web Server", MessageBoxButtons.OK,
@@ -140,48 +171,46 @@ namespace HearthPortableWebServer.Launcher
 
         private void btnStartSvc_Click(object sender, EventArgs e)
         {
-            ServiceManager.StartService();
+            ServiceManager.StartService(Port);
             RefreshStatus();
         }
 
         private void btnStopSvc_Click(object sender, EventArgs e)
         {
-            ServiceManager.StopService();
+            ServiceManager.StopService(Port);
             RefreshStatus();
-        }
-
-        private void btnMinimize_Click(object sender, EventArgs e)
-        {
-            // Minimize to the Windows taskbar. The app stays a clickable taskbar button
-            // and can be restored at any time; the web server is unaffected.
-            this.WindowState = FormWindowState.Minimized;
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // Only prompt when the user is closing the window, this UI started the
-            // server, and the server is actually still running.
+            // The foreground server is tied to this launcher. If it is running when the
+            // user closes the window, offer to stop it or to cancel the close. For a
+            // server that should outlive the launcher, the user installs it as a Windows
+            // Service instead (see the service panel).
             if (e.CloseReason == CloseReason.UserClosing
-                && _serverStartedHere
                 && HostProcessManager.IsRunning(Port))
             {
                 DialogResult choice = MessageBox.Show(
                     this,
-                    "The web server is currently running. Do you want to stop the web server?\r\n\r\n" +
-                    "[Yes]  Stop the web server.\r\n" +
-                    "[No]   Let the web server keep running in the background.\r\n\r\n" +
-                    "If the server is running in the background, you can always run this " +
-                    "program again and press the [Stop] button to stop the server.",
+                    "The web server is currently running. Closing the launcher will stop it.\r\n\r\n" +
+                    "[Yes]  Stop the web server and close.\r\n" +
+                    "[No]   Do not close the launcher.\r\n\r\n" +
+                    "To keep a server running in the background after closing, install it " +
+                    "as a Windows Service from the service panel instead.",
                     "Web server is running",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question);
 
-                if (choice == DialogResult.Yes)
+                if (choice != DialogResult.Yes)
                 {
-                    HostProcessManager.StopServer(Port);
+                    // Abort the close entirely; keep the launcher open.
+                    e.Cancel = true;
+                    base.OnFormClosing(e);
+                    return;
                 }
-                // [No] -> fall through and let the window close; the detached server
-                // process keeps running in the background.
+
+                // [Yes] -> stop the server, then let the window close.
+                HostProcessManager.StopServer(Port);
             }
 
             base.OnFormClosing(e);
@@ -207,7 +236,15 @@ namespace HearthPortableWebServer.Launcher
             btnStart.Enabled = !running;
             btnStop.Enabled = running;
 
-            lblServiceStatus.Text = "Service: " + ServiceManager.ServiceStatusText();
+            // Freeze the port and web root while a server is running on this port: they
+            // must not change out from under a live server (that is what caused the
+            // launcher to "lose track" of the port). They unfreeze automatically once
+            // the server stops.
+            numPort.Enabled = !running;
+            txtRoot.Enabled = !running;
+            btnBrowse.Enabled = !running;
+
+            lblServiceStatus.Text = "Service: " + ServiceManager.ServiceStatusText(Port);
         }
 
         private void SetStatus(string text, Color color)

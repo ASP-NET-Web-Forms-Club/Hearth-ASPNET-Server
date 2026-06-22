@@ -75,7 +75,9 @@ namespace HearthPortableWebServer.Host
             }
 
             // For service mode the SCM supplies no arguments, so fall back to server.config.
-            if (o.Mode == HostMode.Service && (!portSet || !rootSet))
+            // Uninstall also falls back to config so it can target the correct port-based
+            // service name when invoked without an explicit --port.
+            if ((o.Mode == HostMode.Service || o.Mode == HostMode.Uninstall) && (!portSet || !rootSet))
             {
                 ServerConfig config = ServerConfig.Load(ServerConfig.DefaultConfigPath());
                 if (!portSet)
@@ -106,7 +108,7 @@ namespace HearthPortableWebServer.Host
                 case HostMode.Install:
                     return Installer.Install(o.Port, o.Root);
                 case HostMode.Uninstall:
-                    return Installer.Uninstall();
+                    return Installer.Uninstall(o.Port);
                 case HostMode.Stop:
                     return StopRunning(o.Port);
                 case HostMode.Help:

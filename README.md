@@ -1,5 +1,7 @@
 ﻿# Hearth Portable ASP.NET Web Server
 
+[https://github.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server](https://github.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server)
+
 A lightweight, high performance, portable web server designed for ASP.NET applications.
 A self-contained, IIS-free host for **ASP.NET Web Forms** applications, built on
 **C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher with a console /
@@ -56,9 +58,6 @@ HearthPortableWebServer.Host.exe --install --port 8080 --root "C:\site\wwwroot" 
 HearthPortableWebServer.Host.exe --uninstall                                      (admin)
 HearthPortableWebServer.Host.exe --service        (used by the SCM; reads server.config)
 ```
-
-On first run against an empty root, a demo site is generated
-(`Default.aspx`, `api.aspx`, `index.html`, `Web.config`).
 
 Closing the launcher while a server it started is still running prompts: **[Yes]**
 stop it, **[No]** leave it running in the background. A **Minimize to taskbar** button

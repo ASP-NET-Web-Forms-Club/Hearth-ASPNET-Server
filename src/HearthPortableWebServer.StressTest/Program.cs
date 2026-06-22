@@ -90,8 +90,7 @@ namespace HearthPortableWebServer.StressTest
             Console.WriteLine("  Levels    : " + string.Join(", ", LevelsToStrings(options.Levels)));
             Console.WriteLine("  Duration  : " + options.DurationSeconds.ToString(Inv) + " s/level (warmup "
                               + options.WarmupSeconds.ToString(Inv) + " s)");
-            Console.WriteLine("  Client    : " + Environment.MachineName + ", "
-                              + Environment.ProcessorCount.ToString(Inv) + " logical CPUs");
+            Console.WriteLine("  Client    : " + Environment.ProcessorCount.ToString(Inv) + " logical CPUs");
             Console.WriteLine();
 
             using (HttpClient client = new HttpClient())
