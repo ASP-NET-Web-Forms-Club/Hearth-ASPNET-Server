@@ -13,6 +13,7 @@ namespace HearthPortableWebServer.Common
         private const string RunningMutexPrefix = @"Global\HearthPortableWebServer_Running_";
         private const string ShutdownEventPrefix = @"Global\HearthPortableWebServer_Shutdown_";
         private const string ReadyEventPrefix = @"Global\HearthPortableWebServer_Ready_";
+        private const string RecycleEventPrefix = @"Global\HearthPortableWebServer_Recycle_";
 
         /// <summary>Held by the Host while the server is alive. Presence == running.</summary>
         public static string RunningMutex(int port)
@@ -30,6 +31,16 @@ namespace HearthPortableWebServer.Common
         public static string ReadyEvent(int port)
         {
             return ReadyEventPrefix + port.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Set by the worker AppDomain when ASP.NET tears it down (e.g. a DLL in
+        /// <c>bin</c> or <c>web.config</c> changed). Tells the Host to recycle the
+        /// worker AppDomain in place, the IIS app-pool-recycle equivalent.
+        /// </summary>
+        public static string RecycleEvent(int port)
+        {
+            return RecycleEventPrefix + port.ToString(CultureInfo.InvariantCulture);
         }
 
         /// <summary>

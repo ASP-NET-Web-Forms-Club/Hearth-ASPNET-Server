@@ -150,6 +150,8 @@ namespace HearthPortableWebServer.Host
 
             EventWaitHandle shutdown = SyncHelper.CreateEvent(
                 IpcNames.ShutdownEvent(o.Port), EventResetMode.ManualReset);
+            EventWaitHandle recycle = SyncHelper.CreateEvent(
+                IpcNames.RecycleEvent(o.Port), EventResetMode.AutoReset);
             EventWaitHandle ready = SyncHelper.CreateEvent(
                 IpcNames.ReadyEvent(o.Port), EventResetMode.ManualReset);
             ready.Set();
@@ -160,7 +162,40 @@ namespace HearthPortableWebServer.Host
                 shutdown.Set();
             };
 
-            shutdown.WaitOne();
+            // Wait for either an explicit shutdown or a recycle request raised by the
+            // worker AppDomain when ASP.NET tears it down (e.g. a bin DLL was updated).
+            // On recycle, rebuild the worker in place — the IIS app-pool-recycle
+            // equivalent — so the site keeps serving without a manual stop/start.
+            WaitHandle[] handles = { shutdown, recycle };
+            bool keepRunning = true;
+            while (keepRunning)
+            {
+                int which = WaitHandle.WaitAny(handles);
+                if (which == 0)
+                {
+                    keepRunning = false;
+                }
+                else
+                {
+                    Console.WriteLine("Change detected - recycling worker AppDomain...");
+                    ready.Reset();
+                    try
+                    {
+                        controller.Stop();
+                        // Debounce: file copies often raise several change events in a
+                        // row; let them settle before bringing the new domain up.
+                        Thread.Sleep(500);
+                        controller.Start(o.Port, o.Root);
+                        ready.Set();
+                        Console.WriteLine("Recycled. Serving the updated application.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine("Recycle failed: " + ex.Message);
+                        keepRunning = false;
+                    }
+                }
+            }
 
             Console.WriteLine("Stopping...");
             controller.Stop();

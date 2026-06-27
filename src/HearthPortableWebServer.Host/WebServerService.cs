@@ -1,4 +1,6 @@
-﻿using System.ServiceProcess;
+﻿using System;
+using System.ServiceProcess;
+using System.Threading;
 using HearthPortableWebServer.Common;
 
 namespace HearthPortableWebServer.Host
@@ -12,6 +14,10 @@ namespace HearthPortableWebServer.Host
         private readonly int _port;
         private readonly string _root;
         private ServerController _controller;
+
+        private EventWaitHandle _recycle;
+        private EventWaitHandle _stopWatcher;
+        private Thread _watcherThread;
 
         public WebServerService(int port, string root)
         {
@@ -27,6 +33,14 @@ namespace HearthPortableWebServer.Host
         {
             _controller = new ServerController();
             _controller.Start(_port, _root);
+
+            // Watch for worker-AppDomain recycle requests (a bin DLL or web.config
+            // changed) and rebuild the worker in place, the IIS app-pool-recycle
+            // equivalent. Without this the service would go dark on a DLL update.
+            _recycle = SyncHelper.CreateEvent(IpcNames.RecycleEvent(_port), EventResetMode.AutoReset);
+            _stopWatcher = new EventWaitHandle(false, EventResetMode.ManualReset);
+            _watcherThread = new Thread(WatchForRecycle) { IsBackground = true, Name = "RecycleWatcher" };
+            _watcherThread.Start();
         }
 
         protected override void OnStop()
@@ -39,8 +53,46 @@ namespace HearthPortableWebServer.Host
             StopController();
         }
 
+        private void WatchForRecycle()
+        {
+            WaitHandle[] handles = { _stopWatcher, _recycle };
+            while (true)
+            {
+                int which = WaitHandle.WaitAny(handles);
+                if (which == 0)
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (_controller != null)
+                    {
+                        _controller.Stop();
+                        Thread.Sleep(500);   // debounce burst of file-change events
+                        _controller.Start(_port, _root);
+                    }
+                }
+                catch (Exception)
+                {
+                    // Leave the worker down; the SCM recovery options can restart the
+                    // service. Swallow so the watcher thread does not crash the process.
+                }
+            }
+        }
+
         private void StopController()
         {
+            if (_stopWatcher != null)
+            {
+                _stopWatcher.Set();
+            }
+            if (_watcherThread != null)
+            {
+                _watcherThread.Join(2000);
+                _watcherThread = null;
+            }
+
             if (_controller != null)
             {
                 _controller.Stop();

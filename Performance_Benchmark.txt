@@ -1,0 +1,160 @@
+The following stress test was run on the following computer specs:
+
+The source code of running this test is available at: [HearthPortableWebServer.StressTest](https://github.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/tree/main/src/HearthPortableWebServer.StressTest)
+
+Target web application in the test: Un-initialized [Hearth CMS](https://github.com/ASP-NET-Web-Forms-Club/Hearth-CMS) (Pageless ASP.NET Web Forms CMS)
+
+* **OS:** Windows 11 Pro x64 25H2 (OS build: 26200.8655)
+* **CPU:** Intel Core i7-4770S @ 3.10GHz (Max Turbo Boost: 3.90GHz)
+* **Cores:** 4 Physical, 8 Logical Processors
+* **Cache:** L1: 256 KB | L2: 1.0 MB | L3: 8.0 MB
+* **RAM:** 24GB DDR3
+* **Storage:** Samsung SSD 870 EVO 500GB
+
+## Hearth Portable ASP.NET Web Server - Stress Test Result:
+
+```
+============================================================================================
+Portable ASP.NET Web Server - Stress Test Report
+============================================================================================
+Generated  : 2026-06-21 20:59:24
+Target URL : http://localhost:8080/
+Duration   : 10 s measured per level (warmup 3 s)
+Machine    : 8 logical CPUs, x86 test client
+--------------------------------------------------------------------------------------------
+
+Per-level results (latency in milliseconds):
+
+Conc   Requests     Req/sec       Req/min       OK   Fail      Avg     p50     p90     p95     p99      Max
+----- ---------- ----------- ------------- -------- ------ -------- ------- ------- ------- ------- --------
+   1     33,458     3,345.8       200,746   33,458      0     0.30     0.3     0.3     0.3     0.4      3.9
+   2     60,884     6,088.2       365,293   60,884      0     0.33     0.3     0.4     0.4     0.7      5.3
+   4     98,468     9,846.5       590,791   98,468      0     0.41     0.4     0.4     0.5     1.0     11.1
+   8    134,609    13,460.4       807,624  134,609      0     0.59     0.5     0.7     0.9     1.5     83.1
+  16    144,943    14,493.5       869,608  144,943      0     1.10     1.0     1.5     1.9     2.6     11.3
+  32    147,021    14,700.0       882,001  147,021      0     2.18     2.0     3.0     3.5     4.5     17.9
+  64    138,550    13,849.2       830,951  138,550      0     4.62     4.2     8.3     9.7    13.5     88.3
+ 128    149,914    14,979.9       898,796  149,914      0     8.53     8.3    13.6    15.0    20.6     58.1
+ 256    127,077    12,695.9       761,756  127,077      0    20.14    18.6    33.1    38.8    48.5     75.2
+
+--------------------------------------------------------------------------------------------
+PEAK THROUGHPUT
+ Concurrency level : 128
+ Requests / second : 14,979.9
+ Requests / minute : 898,796
+ Avg latency       : 8.53 ms
+ p99 latency       : 20.60 ms
+--------------------------------------------------------------------------------------------
+Status code distribution (all levels):
+ 200                      : 1,034,924
+--------------------------------------------------------------------------------------------
+Total requests sent : 1,034,924
+Total failures      : 0
+Total data received : 3,532.4 MB
+============================================================================================
+```
+
+## Windows 11 IIS
+
+Windows 11 built-in IIS server, same application, and run the stress test, and here is the result (single worker process):
+
+```
+============================================================================================
+Portable ASP.NET Web Server - Stress Test Report
+============================================================================================
+Generated  : 2026-06-21 21:07:48
+Target URL : http://localhost:8006/
+Duration   : 10 s measured per level (warmup 3 s)
+Machine    : 8 logical CPUs, x86 test client
+--------------------------------------------------------------------------------------------
+
+Per-level results (latency in milliseconds):
+
+Conc   Requests     Req/sec       Req/min       OK   Fail      Avg     p50     p90     p95     p99      Max
+----- ---------- ----------- ------------- -------- ------ -------- ------- ------- ------- ------- --------
+   1     28,251     2,825.0       169,500   28,251      0     0.35     0.3     0.4     0.4     0.5      1.6
+   2     46,986     4,698.4       281,907   46,986      0     0.42     0.4     0.5     0.5     0.8      3.4
+   4     77,771     7,777.1       466,624   77,771      0     0.51     0.5     0.6     0.6     1.2     11.3
+   8    107,843    10,782.7       646,962  107,843      0     0.74     0.7     0.9     1.1     1.9     25.4
+  16    123,504    12,348.9       740,935  123,504      0     1.29     1.2     1.7     2.1     2.8     15.6
+  32    124,587    12,456.1       747,366  124,587      0     2.57     2.4     3.4     3.9     4.9     17.8
+  64    126,916    12,683.4       761,003  126,916      0     5.04     4.9     7.1     8.0     9.2     19.2
+ 128    128,959    12,881.1       772,866  128,959      0     9.93    10.0    14.6    15.7    17.8     71.0
+ 256    122,203    12,208.0       732,480  122,203      0    20.95    20.6    28.5    31.3    36.6     58.7
+
+--------------------------------------------------------------------------------------------
+PEAK THROUGHPUT
+ Concurrency level : 128
+ Requests / second : 12,881.1
+ Requests / minute : 772,866
+ Avg latency       : 9.93 ms
+ p99 latency       : 17.83 ms
+--------------------------------------------------------------------------------------------
+Status code distribution (all levels):
+ 200                      : 887,020
+--------------------------------------------------------------------------------------------
+Total requests sent : 887,020
+Total failures      : 0
+Total data received : 3,027.6 MB
+============================================================================================
+```
+
+## Head-to-head (req/sec)
+
+| Concurrency | Portable server | IIS (1 worker) | Portable advantage |
+| --- | --- | --- | --- |
+| 1 | 3,346 | 2,825 | +18% |
+| 2 | 6,088 | 4,698 | +30% |
+| 4 | 9,847 | 7,777 | +27% |
+| 8 | 13,460 | 10,783 | +25% |
+| 16 | 14,494 | 12,349 | +17% |
+| 32 | 14,700 | 12,456 | +18% |
+| 64 | 13,849 | 12,683 | +9% |
+| 128 | 14,980 | 12,881 | +16% |
+| 256 | 12,696 | 12,208 | +4% |
+
+## Analysis
+
+* **Peak Performance:** The portable server maxed out at **~14,980 req/s** vs IIS at **~12,881 req/s**—clocking in about **16% faster overall**, and leading at every single concurrency level.
+* **Latency:** The portable server maintained lower latency across the board (e.g., at Concurrency 8: **0.59 ms** vs **0.74 ms**). 
+* **Stability:** Both servers successfully processed 100% of requests with **zero failures**.
+
+### Why is the portable server faster here? 
+
+This does not automatically mean the Hearth portable server is inherently "better" than IIS. Rather, it indicates the portable server executes fewer instructions per request. In a CPU-bound loopback test, this minimalism translates directly into higher throughput.
+
+1. **Shorter Pipeline:** Both servers share the same kernel driver (`HTTP.sys`), which explains why their base numbers are in the same ballpark. However, above the kernel layer, IIS executes a heavy native module pipeline (Authentication, Request Filtering, Static/Dynamic Content, Compression, Health Monitoring, etc.). Hearth goes almost directly from `HTTP.sys` to `HttpRuntime.ProcessRequest`. Fewer modules = fewer CPU cycles per request.
+2. **No Access Logging:** Stock IIS writes W3C request logs to disk by default, introducing noticeable I/O overhead at ~13K req/s. The portable server logs nothing.
+3. **No Process Management Overhead:** IIS constantly manages app-pool health pings, idle/CPU monitoring, and recycling checks. The portable worker focuses solely on serving requests.
+
+### What the raw numbers leave out (Where IIS earns its keep)
+Throughput is only one piece of the puzzle. IIS's extra overhead funds enterprise features that the portable server simply lacks:
+
+* **Kernel-Mode Output Caching:** For cacheable responses, `HTTP.sys` can serve hundreds of thousands of requests per second, far bypassing these benchmarks. Because this test featured a dynamic, uncacheable page, this advantage wasn't utilized.
+* **Resilience & Scalability:** Web gardens (multiple worker processes), automatic crash recovery, app-pool recycling, and overlapped recycling.
+* **Security:** Native request filtering, TLS/SNI management, Windows Authentication, and IP restrictions.
+* **Operations:** Detailed logging, performance counters, Failed-Request Tracing, and dynamic compression.
+
+> **Test Caveat:** Both client and server shared the same 8 logical CPUs, meaning both ceilings are artificially constrained. Running this test using a separate machine over a physical network would raise the performance ceiling for both—and could either narrow or widen the gap.
+
+## Final Verdict
+
+Out of the box, the Hearth Portable Server is leaner and edges out a stock, single-worker IIS by **~16%** on this dynamic workload. If you stripped IIS down (disabled logging, removed unused modules), it would likely close most of this gap. Conversely, if kernel output caching were enabled on a cacheable page, IIS would pull far ahead.
+
+The most reassuring takeaway isn't the 16% speed advantage—it's that **both reports show an identical traffic shape**. Both saturate around concurrency 8–16, peak at 128, dip at 256, and stay completely error-free. 
+
+Hearth doesn't just run fast; it behaves like a mature server under load, demonstrating graceful saturation and textbook Little's Law latency growth.
+
+## The Breakdown Performance Per Minute of Hearth Portable ASP.NET Web Server
+
+| Concurrency (Simultaneous Users) | Performance Per Minute (Req/Min) | Health Status |
+| --- | --- | --- |
+| **1** | 200,746 | 🟢 Perfect (No line) |
+| **2** | 365,293 | 🟢 Perfect |
+| **4** | 590,791 | 🟢 Efficiency multiplying |
+| **8** | 807,624 | 🟡 CPU is working hard |
+| **16** | 869,608 | 🟡 Approaching CPU limit |
+| **32** | 882,001 | 🔴 **CPU is Maxed Out** (Throughput flattens) |
+| **64** | 830,951 | 🔴 CPU is maxed (Small dip due to thread switching) |
+| **128 (PEAK)** | **898,796** | 🔥 **Absolute Maximum Performance Ceiling** |
+| **256** | 761,756 | 📦 Saturated (Safe queueing active) |

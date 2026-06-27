@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Threading;
 using System.Web;
+using System.Web.Hosting;
 
 namespace HearthPortableWebServer.Hosting
 {
@@ -16,8 +17,13 @@ namespace HearthPortableWebServer.Hosting
     /// As a <see cref="MarshalByRefObject"/> it is controlled from the default AppDomain
     /// by the host process (Start / Stop), exactly like w3wp.exe is controlled by WAS.
     /// </summary>
-    public sealed class AspNetHost : MarshalByRefObject
+    public sealed class AspNetHost : MarshalByRefObject, System.Web.Hosting.IRegisteredObject
     {
+        // Must match HearthPortableWebServer.Common.IpcNames.RecycleEvent. Duplicated
+        // here on purpose: this assembly is loaded into the isolated worker AppDomain,
+        // where only the Hosting DLL is deployed, so it must not depend on Common.
+        private const string RecycleEventPrefix = @"Global\HearthPortableWebServer_Recycle_";
+
         // Number of concurrent accept operations kept outstanding. This is what lets a
         // single worker process service many simultaneous connections efficiently.
         private const int ConcurrentAccepts = 32;
@@ -32,6 +38,8 @@ namespace HearthPortableWebServer.Hosting
         private string _physicalDir;
         private string _virtualDir;
         private volatile bool _running;
+        private volatile bool _shuttingDown;
+        private int _port;
         private string _boundPrefix;
 
         /// <summary>Keep the cross-AppDomain proxy alive for the lifetime of the process.</summary>
@@ -52,6 +60,7 @@ namespace HearthPortableWebServer.Hosting
                 return;
             }
 
+            _port = port;
             _physicalDir = physicalDir;
             _virtualDir = string.IsNullOrEmpty(virtualDir) ? "/" : virtualDir;
 
@@ -59,9 +68,57 @@ namespace HearthPortableWebServer.Hosting
             _listener.Start();
             _running = true;
 
+            // Ask ASP.NET to call our IRegisteredObject.Stop(bool) when it begins
+            // tearing this AppDomain down (a bin DLL or web.config changed). That is
+            // our hook to trigger an automatic recycle instead of going dark.
+            HostingEnvironment.RegisterObject(this);
+
             for (int i = 0; i < ConcurrentAccepts; i++)
             {
                 BeginAccept();
+            }
+        }
+
+        /// <summary>
+        /// Called by ASP.NET as it shuts the worker AppDomain down. If this was not a
+        /// deliberate host-initiated <see cref="Stop()"/>, the cause is a file change
+        /// (e.g. an updated DLL in <c>bin</c>); signal the Host to recycle the worker
+        /// in place so the site keeps serving the new build without a manual restart.
+        /// </summary>
+        public void Stop(bool immediate)
+        {
+            if (!_shuttingDown)
+            {
+                SignalRecycle();
+            }
+
+            try
+            {
+                HostingEnvironment.UnregisterObject(this);
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private void SignalRecycle()
+        {
+            try
+            {
+                EventWaitHandle handle;
+                string name = RecycleEventPrefix + _port.ToString(CultureInfo.InvariantCulture);
+                if (EventWaitHandle.TryOpenExisting(name, out handle))
+                {
+                    using (handle)
+                    {
+                        handle.Set();
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Best effort; if we cannot signal, behavior simply falls back to the
+                // pre-existing "manual stop/start" case rather than failing hard.
             }
         }
 
@@ -201,7 +258,18 @@ namespace HearthPortableWebServer.Hosting
                 return;
             }
 
+            // Mark this as a deliberate, host-initiated stop so the IRegisteredObject
+            // shutdown callback does NOT mistake it for a file-change recycle.
+            _shuttingDown = true;
             _running = false;
+
+            try
+            {
+                HostingEnvironment.UnregisterObject(this);
+            }
+            catch (Exception)
+            {
+            }
 
             try
             {
