@@ -7,6 +7,8 @@ A self-contained, IIS-free host for **ASP.NET Web Forms** applications, built on
 **C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher with a console /
 Windows-Service worker process.
 
+![Screenshot Hearth ASP.NET Server](https://raw.githubusercontent.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/refs/heads/main/wiki/screenshot.png)
+
 ## Solution layout
 
 | Project | Output | Role |
