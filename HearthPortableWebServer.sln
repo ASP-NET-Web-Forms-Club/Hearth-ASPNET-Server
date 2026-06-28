@@ -13,7 +13,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HearthPortableWebServer.Lau
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HearthPortableWebServer.StressTest", "src\HearthPortableWebServer.StressTest\HearthPortableWebServer.StressTest.csproj", "{76D964ED-A500-4EDE-AB4E-8E3894356D9E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HearthPortableWebServer.Welcome", "HearthPortableWebServer.Welcome\HearthPortableWebServer.Welcome.csproj", "{38661D65-DFFA-45E5-A797-1F8FA9CE9EC6}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HearthPortableWebServer.Welcome", "src\HearthPortableWebServer.Welcome\HearthPortableWebServer.Welcome.csproj", "{38661D65-DFFA-45E5-A797-1F8FA9CE9EC6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
