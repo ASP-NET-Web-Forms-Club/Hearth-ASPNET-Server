@@ -1,4 +1,4 @@
-﻿namespace HearthPortableWebServer.Manager.UI
+namespace HearthPortableWebServer.Manager.UI
 {
     partial class MainForm
     {
@@ -225,6 +225,7 @@
             this.lvSites.Location = new System.Drawing.Point(8, 8);
             this.lvSites.MultiSelect = false;
             this.lvSites.Name = "lvSites";
+            this.lvSites.ShowItemToolTips = true;
             this.lvSites.Size = new System.Drawing.Size(518, 468);
             this.lvSites.TabIndex = 0;
             this.lvSites.UseCompatibleStateImageBehavior = false;
@@ -254,7 +255,7 @@
             // colRoot
             // 
             this.colRoot.Text = "Web Root Folder";
-            this.colRoot.Width = 140;
+            this.colRoot.Width = 250;
             // 
             // grpActions
             // 

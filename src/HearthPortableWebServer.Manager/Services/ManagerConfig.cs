@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -17,50 +17,83 @@ namespace HearthPortableWebServer.Manager.Services
             Sites = new List<SiteEntry>();
         }
 
+        public static string GetAppDirectory()
+        {
+            try
+            {
+                string asmLocation = typeof(ManagerConfig).Assembly.Location;
+                if (!string.IsNullOrEmpty(asmLocation))
+                {
+                    string dir = Path.GetDirectoryName(asmLocation);
+                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                    {
+                        return dir;
+                    }
+                }
+            }
+            catch { }
+
+            string startup = AppDomain.CurrentDomain.BaseDirectory;
+            return !string.IsNullOrEmpty(startup) ? startup : ".";
+        }
+
         public static string ConfigPath()
         {
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ConfigFileName);
+            return Path.Combine(GetAppDirectory(), ConfigFileName);
         }
 
         public static string ResolveRootAbsolute(string root)
         {
-            if (string.IsNullOrEmpty(root))
+            if (string.IsNullOrWhiteSpace(root))
             {
-                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wwwroot");
+                return Path.Combine(GetAppDirectory(), "wwwroot");
             }
-            if (Path.IsPathRooted(root))
+            string trimmed = root.Trim();
+            if (Path.IsPathRooted(trimmed))
             {
-                return Path.GetFullPath(root);
+                return Path.GetFullPath(trimmed);
             }
-            return Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, root));
+            return Path.GetFullPath(Path.Combine(GetAppDirectory(), trimmed));
+        }
+
+        public static string FormatRootPath(string root)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return "wwwroot";
+            }
+
+            try
+            {
+                string fullPath = ResolveRootAbsolute(root.Trim());
+                string appDir = Path.GetFullPath(GetAppDirectory()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string cleanTarget = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                // If pointing to the exact main EXE root directory
+                if (string.Equals(cleanTarget, appDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    return ".";
+                }
+
+                // If pointing to a subfolder inside the main EXE folder (e.g. wwwroot, site2)
+                string prefix = appDir + Path.DirectorySeparatorChar;
+                if (cleanTarget.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return cleanTarget.Substring(prefix.Length);
+                }
+
+                // Other than current folder root path of main EXE -> use absolute path
+                return fullPath;
+            }
+            catch
+            {
+                return root;
+            }
         }
 
         public static string RelativizePath(string absolutePath)
         {
-            if (string.IsNullOrEmpty(absolutePath))
-            {
-                return "wwwroot";
-            }
-            try
-            {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                if (!baseDir.EndsWith(Path.DirectorySeparatorChar.ToString()))
-                {
-                    baseDir += Path.DirectorySeparatorChar;
-                }
-                Uri baseUri = new Uri(baseDir);
-                Uri targetUri = new Uri(absolutePath.EndsWith(Path.DirectorySeparatorChar.ToString()) ? absolutePath : absolutePath + Path.DirectorySeparatorChar);
-                Uri relUri = baseUri.MakeRelativeUri(targetUri);
-                string rel = Uri.UnescapeDataString(relUri.ToString())
-                    .Replace('/', Path.DirectorySeparatorChar)
-                    .TrimEnd(Path.DirectorySeparatorChar);
-
-                return string.IsNullOrEmpty(rel) ? "." : rel;
-            }
-            catch
-            {
-                return absolutePath;
-            }
+            return FormatRootPath(absolutePath);
         }
 
         public static ManagerConfig Load()
@@ -77,7 +110,21 @@ namespace HearthPortableWebServer.Manager.Services
                     List<SiteEntry> loaded = serializer.Deserialize<List<SiteEntry>>(json);
                     if (loaded != null && loaded.Count > 0)
                     {
+                        bool needsResave = false;
+                        foreach (SiteEntry s in loaded)
+                        {
+                            string formatted = FormatRootPath(s.Root);
+                            if (!string.Equals(s.Root, formatted, StringComparison.Ordinal))
+                            {
+                                s.Root = formatted;
+                                needsResave = true;
+                            }
+                        }
                         config.Sites = loaded;
+                        if (needsResave)
+                        {
+                            config.Save();
+                        }
                         return config;
                     }
                 }
@@ -97,8 +144,8 @@ namespace HearthPortableWebServer.Manager.Services
         {
             List<SiteEntry> list = new List<SiteEntry>();
 
-            string settingsTxt = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Settings.txt");
-            string serverConfig = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "server.config");
+            string settingsTxt = Path.Combine(GetAppDirectory(), "Settings.txt");
+            string serverConfig = Path.Combine(GetAppDirectory(), "server.config");
 
             int port = 8080;
             string root = "wwwroot";
@@ -139,6 +186,7 @@ namespace HearthPortableWebServer.Manager.Services
                     foreach (string line in lines)
                     {
                         string trimmed = line.Trim();
+                        if (trimmed.Length == 0 || trimmed.StartsWith("#") || trimmed.StartsWith(";")) continue;
                         int eq = trimmed.IndexOf('=');
                         if (eq > 0)
                         {
@@ -159,7 +207,7 @@ namespace HearthPortableWebServer.Manager.Services
                 catch { }
             }
 
-            list.Add(new SiteEntry("Default Website", port, root, false));
+            list.Add(new SiteEntry("Default Website", port, FormatRootPath(root), false));
             return list;
         }
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -16,7 +16,7 @@ namespace HearthPortableWebServer.Manager.Services
     {
         public static string HostExePath()
         {
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "HearthPortableWebServer.Host.exe");
+            return Path.Combine(ManagerConfig.GetAppDirectory(), "HearthPortableWebServer.Host.exe");
         }
 
         public static bool IsRunning(int port)
@@ -90,7 +90,7 @@ namespace HearthPortableWebServer.Manager.Services
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory
+                WorkingDirectory = ManagerConfig.GetAppDirectory()
             };
 
             try

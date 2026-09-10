@@ -82,6 +82,7 @@ namespace HearthPortableWebServer.Manager.UI
             item.SubItems.Add(site.Port.ToString());
             item.SubItems.Add(site.AutoStart ? "Yes" : "No");
             item.SubItems.Add(site.Root);
+            item.ToolTipText = site.Root;
             return item;
         }
 
@@ -215,7 +216,7 @@ namespace HearthPortableWebServer.Manager.UI
                 }
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
-                    txtRoot.Text = ManagerConfig.RelativizePath(dialog.SelectedPath);
+                    txtRoot.Text = ManagerConfig.FormatRootPath(dialog.SelectedPath);
                 }
             }
         }
@@ -226,7 +227,7 @@ namespace HearthPortableWebServer.Manager.UI
 
             string name = txtName.Text.Trim();
             int port = (int)numPort.Value;
-            string root = txtRoot.Text.Trim();
+            string root = ManagerConfig.FormatRootPath(txtRoot.Text.Trim());
             bool autoStart = chkAutoStart.Checked;
 
             if (string.IsNullOrEmpty(name))
@@ -252,6 +253,8 @@ namespace HearthPortableWebServer.Manager.UI
             _selectedSite.AutoStart = autoStart;
             _config.Save();
 
+            txtRoot.Text = root;
+
             if (lvSites.SelectedItems.Count > 0)
             {
                 ListViewItem item = lvSites.SelectedItems[0];
@@ -259,6 +262,7 @@ namespace HearthPortableWebServer.Manager.UI
                 item.SubItems[2].Text = port.ToString();
                 item.SubItems[3].Text = autoStart ? "Yes" : "No";
                 item.SubItems[4].Text = root;
+                item.ToolTipText = root;
             }
 
             MessageBox.Show(this, "Site configuration saved.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -487,25 +491,7 @@ namespace HearthPortableWebServer.Manager.UI
 
         public static string GetAppDirectory()
         {
-            try
-            {
-                string asmLocation = typeof(MainForm).Assembly.Location;
-                if (!string.IsNullOrEmpty(asmLocation))
-                {
-                    string dir = Path.GetDirectoryName(asmLocation);
-                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
-                    {
-                        return dir;
-                    }
-                }
-            }
-            catch { }
-
-            if (!string.IsNullOrEmpty(Application.StartupPath))
-            {
-                return Application.StartupPath;
-            }
-            return AppDomain.CurrentDomain.BaseDirectory;
+            return ManagerConfig.GetAppDirectory();
         }
 
         private static string WindowLayoutFilePath()
