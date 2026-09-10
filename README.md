@@ -7,6 +7,10 @@ A self-contained, IIS-free host for **ASP.NET Web Forms** applications, built on
 **C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher and multi-site manager with a console /
 Windows-Service worker process.
 
+**Screenshot - The Site Manager - Handling Multiple Sites**<br>
+![Screenshot - The Site Manager - Handling Multiple Sites](https://raw.githubusercontent.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/refs/heads/main/wiki/screenshot-manager.png)
+
+**Screenshot - Single Site Launcher**<br>
 ![Screenshot Hearth ASP.NET Server](https://raw.githubusercontent.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/refs/heads/main/wiki/screenshot.png)
 
 ## Solution layout
@@ -197,4 +201,5 @@ single-worker IIS in raw throughput.
 ceilings are understated; a second-machine test over the network would raise both. The
 ~16 % gap reflects stock/default configuration of each (e.g. IIS logging enabled) and a
 non-cacheable dynamic page — a cacheable response would let IIS's kernel cache pull far
-ahead.
+ahead.
+
