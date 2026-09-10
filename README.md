@@ -4,7 +4,7 @@
 
 A lightweight, high performance, portable web server designed for ASP.NET applications.
 A self-contained, IIS-free host for **ASP.NET Web Forms** applications, built on
-**C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher with a console /
+**C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher and multi-site manager with a console /
 Windows-Service worker process.
 
 ![Screenshot Hearth ASP.NET Server](https://raw.githubusercontent.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/refs/heads/main/wiki/screenshot.png)
@@ -16,13 +16,15 @@ Windows-Service worker process.
 | `HearthPortableWebServer.Common` | `.dll` | Shared IPC names, `server.config` reader/writer, ACL'd named sync primitives. |
 | `HearthPortableWebServer.Hosting` | `.dll` | The ASP.NET runtime: `HttpListener` + custom `HttpWorkerRequest` feeding `HttpRuntime.ProcessRequest`. Loaded into the isolated worker AppDomain. |
 | `HearthPortableWebServer.Host` | `.exe` | Console / Windows-Service worker process. Owns the worker AppDomain lifecycle. |
-| `HearthPortableWebServer.Launcher` | `.exe` | WinForms UI: configure, start/stop, browse, install/uninstall service. |
+| `HearthPortableWebServer.Launcher` | `.exe` | WinForms UI: configure, start/stop, browse, install/uninstall service (single-site mode). |
+| `HearthPortableWebServer.Manager` | `.exe` | WinForms & Windows Service multi-site manager: orchestrate multiple isolated web applications, manage ports/roots, system tray, auto-start on boot, and debounced window persistence. |
 | `HearthPortableWebServer.StressTest` | `.exe` | Load generator: concurrency sweep, throughput + latency percentiles, writes a timestamped log report. |
 
 All projects build to a shared `build\<Configuration>\` folder.
 
-## Architecture (IIS-equivalent single worker process)
+## Architecture (IIS-equivalent worker processes)
 
+### Single Worker Process (Host)
 ```
  Launcher.exe (WinForms)              Host.exe (separate process)
  ────────────────────────            ─────────────────────────────
@@ -44,13 +46,50 @@ All projects build to a shared `build\<Configuration>\` folder.
   launcher leaves the server running; it is stopped only by an explicit signal,
   Ctrl+C, or the Service Control Manager.
 
+### Multi-Site Manager Architecture
+```
+                 HearthPortableWebServer.Manager.exe
+               (WinForms Dashboard or Session 0 Service)
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        ▼                       ▼                       ▼
+  Host.exe (Port 8080)    Host.exe (Port 8081)    Host.exe (Port 8082)
+   AppDomain: Site #1      AppDomain: Site #2      AppDomain: Site #3
+  (wwwroot / isolated)    (site2 / isolated)      (crm / isolated)
+```
+
+* **True Process Isolation** — Spawns and manages dedicated, independent `Host.exe` worker processes for each website entry, running concurrently without interference or cross-talk.
+* **Zero Host Modifications** — Builds seamlessly on top of Hearth's existing IPC primitives (`Global\HearthPortableWebServer_Running_<port>` and `Shutdown_<port>`), keeping the battle-tested core server engine 100% intact.
+* **Session 0 Pre-Login Service** — Can run headless at machine boot as `HearthManagerService` before user login, with an active watchdog that auto-starts designated sites and auto-heals unexpected terminations.
+* **Permission Inheritance** — Automatically configures directory ACLs for `Authenticated Users` so SQLite files and uploads created by the background service (`LocalSystem`) remain writable by interactive users.
+* **Debounced Layout Persistence** — Automatically monitors window adjustments and launches a 3-second countdown timer (resetting on continuous movement), persisting window size and coordinates to `window_layout.txt` with multi-monitor sanity restoration.
+
 ## Usage
 
-### Launcher (GUI)
+### Multi-Site Manager (GUI & Windows Service)
+Run `HearthPortableWebServer.Manager.exe`:
+* **Multi-Site Dashboard**: View real-time status (● Running / ○ Stopped) for all configured ASP.NET websites.
+* **Per-Site Controls**: Dedicated **Start Server**, **Stop Server**, **Browse Web App**, and **Open Web Root** buttons for each application entry.
+* **Global Controls**: **Start All Sites** and **Stop All Sites** for bulk operations.
+* **Add & Configure Websites**: Specify custom Site Name, dedicated HTTP Port, and relative or absolute application folder path (`manager_sites.json`). Auto-migrates existing `Settings.txt` or `server.config` on first launch.
+* **System Tray Minimization**: Closing or minimizing with running servers gives the option to minimize to the notification area with tray menu controls.
+* **Debounced Window Layout Saving**: Automatically detects resize or reposition events and triggers a 3-second countdown timer. If you continue adjusting the window, the timer resets; when adjustments cease for 3 seconds, your window location and size are saved to `window_layout.txt` and restored on the next startup.
+* **Windows Service Setup (Session 0 Boot)**: Click **⚙ Windows Service (Boot)** to install `HearthManagerService`. Runs headless on machine boot before user login, auto-starts designated websites, and automatically restores them if a process terminates unexpectedly.
+
+```
+HearthPortableWebServer.Manager.exe              (launches interactive WinForms dashboard)
+HearthPortableWebServer.Manager.exe --service    (runs as background Windows Service via SCM)
+```
+
+### Launcher (Single-Site GUI)
 Run `HearthPortableWebServer.Launcher.exe`:
 * **Port** (default `8080`) and **Web root** (default `<startup path>\wwwroot`).
 * **Start / Stop Web Server**, **Browse Web App**.
 * **Install / Uninstall Service** (auto-start with Windows; prompts for UAC).
+
+Closing the launcher while a server it started is still running prompts: **[Yes]**
+stop it, **[No]** leave it running in the background. A **Minimize to taskbar** button
+is also provided.
 
 ### Host (command line)
 ```
@@ -60,10 +99,6 @@ HearthPortableWebServer.Host.exe --install --port 8080 --root "C:\site\wwwroot" 
 HearthPortableWebServer.Host.exe --uninstall                                      (admin)
 HearthPortableWebServer.Host.exe --service        (used by the SCM; reads server.config)
 ```
-
-Closing the launcher while a server it started is still running prompts: **[Yes]**
-stop it, **[No]** leave it running in the background. A **Minimize to taskbar** button
-is also provided.
 
 ### Stress test
 Run `HearthPortableWebServer.StressTest.exe`. With no `--url` it asks for the target host
@@ -93,6 +128,8 @@ msbuild HearthPortableWebServer.sln /p:Configuration=Release
 * Static files served with `ETag` / `Last-Modified` caching headers.
 * 200 concurrent requests → 200 × HTTP 200 in ~0.12 s.
 * `--stop` signal shuts the worker down gracefully and frees the port.
+* Manager orchestrates multiple concurrent `Host.exe` instances across distinct ports (`8080`, `8081`, etc.) with individual start/stop lifecycle management.
+* Manager automatically debounces and restores window layout coordinates (`window_layout.txt`) via a 3-second timer.
 
 ## Performance & load testing
 
@@ -160,4 +197,4 @@ single-worker IIS in raw throughput.
 ceilings are understated; a second-machine test over the network would raise both. The
 ~16 % gap reflects stock/default configuration of each (e.g. IIS logging enabled) and a
 non-cacheable dynamic page — a cacheable response would let IIS's kernel cache pull far
-ahead.
+ahead.
