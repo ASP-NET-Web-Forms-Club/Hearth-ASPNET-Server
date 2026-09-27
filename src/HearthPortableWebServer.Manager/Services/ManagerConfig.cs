@@ -49,11 +49,16 @@ namespace HearthPortableWebServer.Manager.Services
                 return Path.Combine(GetAppDirectory(), "wwwroot");
             }
             string trimmed = root.Trim();
-            if (Path.IsPathRooted(trimmed))
-            {
-                return Path.GetFullPath(trimmed);
-            }
-            return Path.GetFullPath(Path.Combine(GetAppDirectory(), trimmed));
+            string fullPath = Path.IsPathRooted(trimmed)
+                ? Path.GetFullPath(trimmed)
+                : Path.GetFullPath(Path.Combine(GetAppDirectory(), trimmed));
+
+            // A trailing separator escapes the closing quote in the host's --root argument.
+            // Preserve drive roots (for example, D:\) while removing separators elsewhere.
+            string pathRoot = Path.GetPathRoot(fullPath);
+            return fullPath.Length > pathRoot.Length
+                ? fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                : fullPath;
         }
 
         public static string FormatRootPath(string root)

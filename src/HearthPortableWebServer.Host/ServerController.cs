@@ -52,6 +52,9 @@ namespace HearthPortableWebServer.Host
 
         public static string NormalizeRoot(string root)
         {
+            // A quoted --root ending in a backslash can arrive with a literal closing quote.
+            // Quotes are invalid in Windows paths, so discard a trailing one before resolving.
+            root = root == null ? null : root.TrimEnd('"');
             if (string.IsNullOrEmpty(root))
             {
                 root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wwwroot");
@@ -60,7 +63,12 @@ namespace HearthPortableWebServer.Host
             {
                 root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, root);
             }
-            return Path.GetFullPath(root);
+
+            string fullPath = Path.GetFullPath(root);
+            string pathRoot = Path.GetPathRoot(fullPath);
+            return fullPath.Length > pathRoot.Length
+                ? fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                : fullPath;
         }
 
         private static void DeployHostingAssembly(string root)
