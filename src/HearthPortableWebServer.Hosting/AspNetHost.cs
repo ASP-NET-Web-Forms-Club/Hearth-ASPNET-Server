@@ -195,6 +195,11 @@ namespace HearthPortableWebServer.Hosting
         {
             try
             {
+                if (TryDirectoryRedirect(context))
+                {
+                    return;
+                }
+
                 string effectivePath = ResolveEffectivePath(context.Request.Url.LocalPath);
                 ListenerHttpWorkerRequest worker =
                     new ListenerHttpWorkerRequest(context, _physicalDir, _virtualDir, effectivePath);
@@ -204,6 +209,47 @@ namespace HearthPortableWebServer.Hosting
             {
                 TryWriteError(context, ex);
             }
+        }
+
+        /// <summary>
+        /// IIS-style courtesy redirect: a request for "/foo" where foo is a physical
+        /// directory (and not a file) gets a 301 to "/foo/", so default-document
+        /// handling applies. Without this, ASP.NET receives a bare directory path,
+        /// routing skips it (RouteExistingFiles = false) and StaticFileHandler
+        /// throws "File does not exist." (404).
+        /// </summary>
+        private bool TryDirectoryRedirect(HttpListenerContext context)
+        {
+            string localPath = context.Request.Url.LocalPath;
+            if (string.IsNullOrEmpty(localPath) || localPath.EndsWith("/", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            string physical;
+            try
+            {
+                string relative = localPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+                physical = Path.Combine(_physicalDir, relative);
+            }
+            catch (ArgumentException)
+            {
+                // Illegal path characters: let ASP.NET produce its normal error.
+                return false;
+            }
+
+            if (File.Exists(physical) || !Directory.Exists(physical))
+            {
+                return false;
+            }
+
+            // AbsolutePath keeps URL encoding (spaces etc.); Query includes the leading '?'.
+            context.Response.StatusCode = 301;
+            context.Response.RedirectLocation =
+                context.Request.Url.AbsolutePath + "/" + context.Request.Url.Query;
+            context.Response.ContentLength64 = 0;
+            context.Response.Close();
+            return true;
         }
 
         /// <summary>
