@@ -13,6 +13,19 @@ Windows-Service worker process.
 **Screenshot - Single Site Launcher**<br>
 ![Screenshot Hearth ASP.NET Server](https://raw.githubusercontent.com/ASP-NET-Web-Forms-Club/Hearth-ASPNET-Server/refs/heads/main/wiki/screenshot.png)
 
+## In What Circumstances is Hearth Portable ASP.NET Web Server Useful Compared to IIS?
+
+While Windows (Pro/Enterprise/Server) includes IIS, IIS has distinct characteristics that make it unsuitable or cumbersome in specific scenarios:
+
+| Dimension | Full Windows IIS | Hearth Portable ASP.NET Server |
+| :--- | :--- | :--- |
+| **Portability & Footprint** | System component requiring OS feature activation (`dism` / Windows Features). Often locked down or absent in Windows Home editions, embedded Windows, or restricted corporate machines. | **Zero install / fully portable**. Run from a USB stick, a local folder, or bundled with an installer. |
+| **Administrative Rights** | Requires Administrator privileges to configure sites, change bindings, edit `applicationHost.config`, and register app pools. | **Runs under standard user rights** (via loopback `http://localhost:<port>/` or `127.0.0.1:<port>/`), requiring no admin elevation unless installing as a Windows service or binding `http://+:port/`. |
+| **Isolation & Clean Teardown** | Global system-wide service; configuration drifts inside `applicationHost.config`; file permission issues with `IIS_IUSRS`. | Complete directory and process encapsulation. Stop or delete the folder, and zero residue remains on the host machine. |
+| **App-in-a-Box / Self-Contained Desktop/Edge Appliance** | Difficult to ship a pre-packaged desktop app that uses ASP.NET Web Forms as the UI / local server (e.g. POS systems, medical devices, internal network kiosk appliances). | **Ideal for embedded web-based desktop tools**. You can bundle `Host.exe` + Web Forms + SQLite/LocalDB and run it seamlessly like an Electron or desktop app backend. |
+| **Raw Pipeline Throughput** | Heavier pipeline (HTTP modules, request filtering, Windows Auth modules, ETW logging, WAS). | **16% faster raw throughput** than single-worker IIS in dynamic workloads (14,980 vs 12,881 req/s) because it goes straight from `HttpListener` into `HttpRuntime.ProcessRequest` with minimal middleware overhead. |
+| **Rapid Dev / Multi-tenant Sandboxing** | Managing 10 different sites in IIS requires managing 10 app pools and site records in global IIS config. | Hearth Manager (`manager_sites.json`) lets you launch, stop, monitor, or watchdog multiple separate Web Forms instances dynamically by port. |
+
 ## Solution layout
 
 | Project | Output | Role |
