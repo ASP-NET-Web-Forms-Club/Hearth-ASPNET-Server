@@ -4,7 +4,8 @@
 
 A lightweight, high performance, portable web server designed for ASP.NET applications.
 A self-contained, IIS-free host for **ASP.NET Web Forms** applications, built on
-**C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher and multi-site manager with a console /
+**C# 7.3 / .NET Framework 4.8**. It pairs a WinForms launcher and a powerful multi-site manager
+supporting **ASP.NET, .NET Core, Python, Node.js, and PHP** side-by-side with a console /
 Windows-Service worker process.
 
 **Screenshot - The Site Manager - Handling Multiple Sites**<br>
@@ -68,29 +69,36 @@ All projects build to a shared `build\<Configuration>\` folder.
                  HearthPortableWebServer.Manager.exe
                (WinForms Dashboard or Session 0 Service)
                                 │
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-  Host.exe (Port 8080)    Host.exe (Port 8081)    Host.exe (Port 8082)
-   AppDomain: Site #1      AppDomain: Site #2      AppDomain: Site #3
-  (wwwroot / isolated)    (site2 / isolated)      (crm / isolated)
+        ┌───────────────────────┼───────────────────────┬───────────────────────┐
+        ▼                       ▼                       ▼                       ▼
+  Host.exe (Port 8080)    python.exe (Port 8081)   node.exe (Port 8082)   app.exe (Port 8083)
+   AppDomain: Site #1        Python: Site #2         Node: Site #3        .NET Core: Site #4
+  (wwwroot / ASP.NET)       (app.py / Flask/etc.)   (server.js / Express) (Kestrel / isolated)
 ```
 
-* **True Process Isolation** — Spawns and manages dedicated, independent `Host.exe` worker processes for each website entry, running concurrently without interference or cross-talk.
-* **Zero Host Modifications** — Builds seamlessly on top of Hearth's existing IPC primitives (`Global\HearthPortableWebServer_Running_<port>` and `Shutdown_<port>`), keeping the battle-tested core server engine 100% intact.
+* **Multi-Engine Orchestration** — Spawns and manages dedicated, independent worker processes for **ASP.NET (Web Forms / .NET 4.8)**, **.NET Core**, **Python**, **Node.js**, **PHP**, and custom executables side-by-side without interference or cross-talk.
+* **Auto Port & Env Binding** — Automatically passes assigned ports via standard environment variables (`PORT`, `HTTP_PLATFORM_PORT`, `ASPNETCORE_URLS`, `ASPNETCORE_HTTP_PORTS`) so child runtimes bind seamlessly without manual config changes.
+* **Smart Runtime Detection** — Auto-detects local virtual environments (such as `.venv\Scripts\python.exe` or `venv\Scripts\python.exe`), supports custom executable paths, and expands Windows environment variables (`%VAR%`).
+* **Built-in Live Reload (File Watcher)** — Optional live-reload file watcher monitors project files (`.py`, `.js`, `.ts`, `.php`, `.cs`, `.json`, `.config`) with a 500ms debounce, automatically restarting child processes upon save.
+* **Safe Stop Lifecycle** — Stopping a running server automatically toggles its `Auto-Start` setting to `No` first, preventing unexpected background service or watchdog revivals, and terminates the full process tree (`taskkill /F /T`) so ports are freed with zero orphan processes.
 * **Session 0 Pre-Login Service** — Can run headless at machine boot as `HearthManagerService` before user login, with an active watchdog that auto-starts designated sites and auto-heals unexpected terminations.
 * **Permission Inheritance** — Automatically configures directory ACLs for `Authenticated Users` so SQLite files and uploads created by the background service (`LocalSystem`) remain writable by interactive users.
-* **Debounced Layout Persistence** — Automatically monitors window adjustments and launches a 3-second countdown timer (resetting on continuous movement), persisting window size and coordinates to `window_layout.txt` with multi-monitor sanity restoration.
+* **Debounced Layout Persistence** — Modern `1200x715` window fits laptop displays (1366x768) natively. Automatically monitors window adjustments and launches a 3-second countdown timer, persisting window size and coordinates to `window_layout.txt`.
 
 ## Usage
 
 ### Multi-Site Manager (GUI & Windows Service)
 Run `HearthPortableWebServer.Manager.exe`:
-* **Multi-Site Dashboard**: View real-time status (● Running / ○ Stopped) for all configured ASP.NET websites.
-* **Per-Site Controls**: Dedicated **Start Server**, **Stop Server**, **Browse Web App**, and **Open Web Root** buttons for each application entry.
+* **Multi-Site Dashboard**: View real-time status (● Running / ○ Stopped) for all configured applications across distinct engines in the dedicated **Type** column.
+* **Multi-Engine Selection**: Choose between **ASP.NET**, **.NET Core**, **Python**, **Node.js**, **PHP**, or **Other**.
+* **Smart Entry Defaults**: Auto-suggests entry scripts (e.g. `app.py`, `server.js`, `index.php`), while allowing optional custom executables or arguments.
+* **Per-Site Controls**: Dedicated **Start Server**, **Stop Server**, **Browse in Browser**, and **Open Web Root in Explorer** buttons for each application entry.
+* **Live Reload Checkbox**: Toggle `Live Reload: Auto-restart on file change` for rapid iterative development.
+* **Safe Stop Protection**: Clicking **Stop Server** sets `Auto-Start` to `No` first, ensuring the watchdog service will not immediately revive a manually stopped site.
 * **Global Controls**: **Start All Sites** and **Stop All Sites** for bulk operations.
-* **Add & Configure Websites**: Specify custom Site Name, dedicated HTTP Port, and relative or absolute application folder path (`manager_sites.json`). Auto-migrates existing `Settings.txt` or `server.config` on first launch.
+* **Add & Configure Websites**: Specify custom Site Name, Engine Type, dedicated HTTP Port, and relative or absolute application folder path (`manager_sites.json`). Auto-migrates existing `Settings.txt` or `server.config` on first launch.
 * **System Tray Minimization**: Closing or minimizing with running servers gives the option to minimize to the notification area with tray menu controls.
-* **Debounced Window Layout Saving**: Automatically detects resize or reposition events and triggers a 3-second countdown timer. If you continue adjusting the window, the timer resets; when adjustments cease for 3 seconds, your window location and size are saved to `window_layout.txt` and restored on the next startup.
+* **Debounced Window Layout Saving**: Automatically detects resize or reposition events and saves window location and size to `window_layout.txt` after 3 seconds of inactivity.
 * **Windows Service Setup (Session 0 Boot)**: Click **⚙ Windows Service (Boot)** to install `HearthManagerService`. Runs headless on machine boot before user login, auto-starts designated websites, and automatically restores them if a process terminates unexpectedly.
 
 ```
@@ -145,7 +153,9 @@ msbuild HearthPortableWebServer.sln /p:Configuration=Release
 * Static files served with `ETag` / `Last-Modified` caching headers.
 * 200 concurrent requests → 200 × HTTP 200 in ~0.12 s.
 * `--stop` signal shuts the worker down gracefully and frees the port.
-* Manager orchestrates multiple concurrent `Host.exe` instances across distinct ports (`8080`, `8081`, etc.) with individual start/stop lifecycle management.
+* Manager orchestrates multiple concurrent sites across distinct engines (ASP.NET, .NET Core, Python, Node.js, PHP) and distinct ports (`8080`, `8081`, etc.) with individual start/stop lifecycle management.
+* Live reload automatically detects file updates and restarts child processes without manual intervention.
+* Stopping a site safely sets `Auto-Start` to `No` first, preventing watchdog restart loops, and terminates all child process trees cleanly.
 * Manager automatically debounces and restores window layout coordinates (`window_layout.txt`) via a 3-second timer.
 
 ## Performance & load testing

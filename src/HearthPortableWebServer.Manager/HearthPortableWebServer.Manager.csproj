@@ -50,7 +50,10 @@
     <Compile Include="Services\ManagerConfig.cs" />
     <Compile Include="Services\ProcessSupervisor.cs" />
     <Compile Include="Services\ServiceControllerHelper.cs" />
-    <Compile Include="Services\ManagerService.cs" />
+    <Compile Include="Services\ManagerService.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Services\SiteWatcherManager.cs" />
     <Compile Include="UI\ServiceSetupForm.cs">
       <SubType>Form</SubType>
     </Compile>

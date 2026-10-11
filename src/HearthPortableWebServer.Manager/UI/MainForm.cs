@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -79,6 +79,7 @@ namespace HearthPortableWebServer.Manager.UI
             item.Tag = site;
             item.ForeColor = running ? Color.DarkGreen : Color.Maroon;
             item.SubItems.Add(site.Name);
+            item.SubItems.Add(string.IsNullOrEmpty(site.Engine) ? "ASP.NET" : site.Engine);
             item.SubItems.Add(site.Port.ToString());
             item.SubItems.Add(site.AutoStart ? "Yes" : "No");
             item.SubItems.Add(site.Root);
@@ -139,9 +140,82 @@ namespace HearthPortableWebServer.Manager.UI
             bool isRunning = ProcessSupervisor.IsRunning(_selectedSite.Port);
             btnStart.Enabled = !isRunning;
             btnStop.Enabled = isRunning;
+
+            txtName.Enabled = !isRunning;
+            cmbEngine.Enabled = !isRunning;
             numPort.Enabled = !isRunning;
             txtRoot.Enabled = !isRunning;
             btnBrowseRoot.Enabled = !isRunning;
+
+            UpdateEngineUiState(!isRunning);
+        }
+
+        private void UpdateEngineUiState(bool canEdit)
+        {
+            string selectedEngine = cmbEngine.SelectedItem != null ? cmbEngine.SelectedItem.ToString() : "ASP.NET";
+            bool isAspNet = string.Equals(selectedEngine, "ASP.NET", StringComparison.OrdinalIgnoreCase);
+
+            if (isAspNet)
+            {
+                lblScript.Text = "Script / File:";
+                txtScript.Enabled = false;
+                txtScript.Text = string.Empty;
+                lblExecutable.Text = "Executable:";
+                txtExecutable.Enabled = false;
+                txtExecutable.Text = string.Empty;
+                btnBrowseExe.Enabled = false;
+                chkAutoRestart.Enabled = false;
+                chkAutoRestart.Checked = false;
+            }
+            else
+            {
+                txtScript.Enabled = canEdit;
+                txtExecutable.Enabled = canEdit;
+                btnBrowseExe.Enabled = canEdit;
+                chkAutoRestart.Enabled = canEdit;
+
+                if (string.Equals(selectedEngine, "Python", StringComparison.OrdinalIgnoreCase))
+                {
+                    lblScript.Text = "Script\r\n(e.g. app.py):";
+                    lblExecutable.Text = "Python Exe (opt):";
+                }
+                else if (string.Equals(selectedEngine, "Node.js", StringComparison.OrdinalIgnoreCase))
+                {
+                    lblScript.Text = "Script\r\n(e.g. server.js):";
+                    lblExecutable.Text = "Node Exe (opt):";
+                }
+                else if (string.Equals(selectedEngine, ".NET Core", StringComparison.OrdinalIgnoreCase))
+                {
+                    lblScript.Text = "Exe / Dll\r\n(e.g. App.exe):";
+                    lblExecutable.Text = "Dotnet / Exe (opt):";
+                }
+                else if (string.Equals(selectedEngine, "PHP", StringComparison.OrdinalIgnoreCase))
+                {
+                    lblScript.Text = "Router\r\n(optional):";
+                    lblExecutable.Text = "PHP Exe (opt):";
+                }
+                else
+                {
+                    lblScript.Text = "Arguments:";
+                    lblExecutable.Text = "Executable Path:";
+                }
+            }
+        }
+
+        private void cmbEngine_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            bool isRunning = _selectedSite != null && ProcessSupervisor.IsRunning(_selectedSite.Port);
+            UpdateEngineUiState(!isRunning);
+
+            string selectedEngine = cmbEngine.SelectedItem != null ? cmbEngine.SelectedItem.ToString() : "ASP.NET";
+            if (string.Equals(selectedEngine, "Python", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(txtScript.Text)) txtScript.Text = "app.py";
+            }
+            else if (string.Equals(selectedEngine, "Node.js", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(txtScript.Text)) txtScript.Text = "server.js";
+            }
         }
 
         private void lvSites_SelectedIndexChanged(object sender, EventArgs e)
@@ -163,16 +237,31 @@ namespace HearthPortableWebServer.Manager.UI
             if (site == null)
             {
                 txtName.Text = string.Empty;
+                cmbEngine.SelectedIndex = 0;
                 numPort.Value = 8080;
                 txtRoot.Text = string.Empty;
+                txtScript.Text = string.Empty;
+                txtExecutable.Text = string.Empty;
                 chkAutoStart.Checked = false;
+                chkAutoRestart.Checked = false;
                 return;
             }
 
             txtName.Text = site.Name;
+
+            string engine = string.IsNullOrEmpty(site.Engine) ? "ASP.NET" : site.Engine;
+            int engineIdx = cmbEngine.FindStringExact(engine);
+            cmbEngine.SelectedIndex = engineIdx >= 0 ? engineIdx : 0;
+
             numPort.Value = Math.Max(numPort.Minimum, Math.Min(numPort.Maximum, site.Port));
             txtRoot.Text = site.Root;
+            txtScript.Text = site.Script ?? string.Empty;
+            txtExecutable.Text = site.Executable ?? string.Empty;
             chkAutoStart.Checked = site.AutoStart;
+            chkAutoRestart.Checked = site.AutoRestart;
+
+            bool isRunning = ProcessSupervisor.IsRunning(site.Port);
+            UpdateEngineUiState(!isRunning);
         }
 
         private void btnAddSite_Click(object sender, EventArgs e)
@@ -193,7 +282,7 @@ namespace HearthPortableWebServer.Manager.UI
                 nextPort++;
             }
 
-            SiteEntry newSite = new SiteEntry("Website " + nextPort, nextPort, "wwwroot", false);
+            SiteEntry newSite = new SiteEntry("Website " + nextPort, nextPort, "wwwroot", false, "ASP.NET");
             _config.Sites.Add(newSite);
             _config.Save();
 
@@ -221,14 +310,41 @@ namespace HearthPortableWebServer.Manager.UI
             }
         }
 
+        private void btnBrowseExe_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "Select Custom Executable / Runtime";
+                dialog.Filter = "Executable & Scripts (*.exe;*.cmd;*.bat)|*.exe;*.cmd;*.bat|All Files (*.*)|*.*";
+                string current = txtExecutable.Text.Trim();
+                if (!string.IsNullOrEmpty(current))
+                {
+                    string expanded = Environment.ExpandEnvironmentVariables(current);
+                    if (File.Exists(expanded))
+                    {
+                        dialog.FileName = expanded;
+                        dialog.InitialDirectory = Path.GetDirectoryName(expanded);
+                    }
+                }
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    txtExecutable.Text = dialog.FileName;
+                }
+            }
+        }
+
         private void btnSaveSite_Click(object sender, EventArgs e)
         {
             if (_selectedSite == null) return;
 
             string name = txtName.Text.Trim();
+            string engine = cmbEngine.SelectedItem != null ? cmbEngine.SelectedItem.ToString() : "ASP.NET";
             int port = (int)numPort.Value;
             string root = ManagerConfig.FormatRootPath(txtRoot.Text.Trim());
+            string script = txtScript.Text.Trim();
+            string exe = txtExecutable.Text.Trim();
             bool autoStart = chkAutoStart.Checked;
+            bool autoRestart = chkAutoRestart.Checked;
 
             if (string.IsNullOrEmpty(name))
             {
@@ -248,9 +364,13 @@ namespace HearthPortableWebServer.Manager.UI
             }
 
             _selectedSite.Name = name;
+            _selectedSite.Engine = engine;
             _selectedSite.Port = port;
             _selectedSite.Root = root;
+            _selectedSite.Script = script;
+            _selectedSite.Executable = exe;
             _selectedSite.AutoStart = autoStart;
+            _selectedSite.AutoRestart = autoRestart;
             _config.Save();
 
             txtRoot.Text = root;
@@ -259,9 +379,10 @@ namespace HearthPortableWebServer.Manager.UI
             {
                 ListViewItem item = lvSites.SelectedItems[0];
                 item.SubItems[1].Text = name;
-                item.SubItems[2].Text = port.ToString();
-                item.SubItems[3].Text = autoStart ? "Yes" : "No";
-                item.SubItems[4].Text = root;
+                item.SubItems[2].Text = engine;
+                item.SubItems[3].Text = port.ToString();
+                item.SubItems[4].Text = autoStart ? "Yes" : "No";
+                item.SubItems[5].Text = root;
                 item.ToolTipText = root;
             }
 
@@ -285,6 +406,25 @@ namespace HearthPortableWebServer.Manager.UI
         private void btnStop_Click(object sender, EventArgs e)
         {
             if (_selectedSite == null) return;
+
+            // First toggle/disable auto-start to false
+            if (_selectedSite.AutoStart || chkAutoStart.Checked)
+            {
+                _selectedSite.AutoStart = false;
+                chkAutoStart.Checked = false;
+                _config.Save();
+
+                if (lvSites.SelectedItems.Count > 0)
+                {
+                    ListViewItem item = lvSites.SelectedItems[0];
+                    if (item.SubItems.Count > 4)
+                    {
+                        item.SubItems[4].Text = "No";
+                    }
+                }
+            }
+
+            // Followed by stopping the server
             ProcessSupervisor.StopSite(_selectedSite.Port);
             RefreshAllStatus();
         }
