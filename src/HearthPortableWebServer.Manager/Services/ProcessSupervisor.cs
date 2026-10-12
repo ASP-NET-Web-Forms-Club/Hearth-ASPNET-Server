@@ -58,7 +58,127 @@ namespace HearthPortableWebServer.Manager.Services
                 }
             }
 
-            return IsPortListening(port);
+            // Only processes Hearth itself started count as running. A port held by some
+            // other application (e.g. IIS / http.sys) is NOT a running Hearth site.
+            return GetPersistedPid(port) > 0;
+        }
+
+        // ---- Persisted process tracking ----
+        // The UI and the Windows service are separate processes, and the Manager may be restarted,
+        // so non-ASP.NET child PIDs are persisted to disk ("port|pid|processName" per line).
+        private const string TrackedFileName = "tracked_processes.txt";
+        private static readonly object _fileLock = new object();
+
+        private static string TrackedFilePath()
+        {
+            return Path.Combine(ManagerConfig.GetAppDirectory(), TrackedFileName);
+        }
+
+        private static Dictionary<int, KeyValuePair<int, string>> LoadPersisted()
+        {
+            Dictionary<int, KeyValuePair<int, string>> map = new Dictionary<int, KeyValuePair<int, string>>();
+            lock (_fileLock)
+            {
+                try
+                {
+                    string path = TrackedFilePath();
+                    if (!File.Exists(path)) return map;
+                    foreach (string line in File.ReadAllLines(path))
+                    {
+                        string[] parts = line.Split('|');
+                        int port, pid;
+                        if (parts.Length >= 3 && int.TryParse(parts[0], out port) && int.TryParse(parts[1], out pid))
+                        {
+                            map[port] = new KeyValuePair<int, string>(pid, parts[2]);
+                        }
+                    }
+                }
+                catch { }
+            }
+            return map;
+        }
+
+        private static void SavePersisted(Dictionary<int, KeyValuePair<int, string>> map)
+        {
+            lock (_fileLock)
+            {
+                try
+                {
+                    string path = TrackedFilePath();
+                    if (map.Count == 0)
+                    {
+                        if (File.Exists(path)) File.Delete(path);
+                        return;
+                    }
+                    List<string> lines = new List<string>();
+                    foreach (KeyValuePair<int, KeyValuePair<int, string>> kv in map)
+                    {
+                        lines.Add(kv.Key + "|" + kv.Value.Key + "|" + kv.Value.Value);
+                    }
+                    File.WriteAllLines(path, lines.ToArray());
+                }
+                catch { }
+            }
+        }
+
+        private static void PersistPid(int port, Process proc)
+        {
+            try
+            {
+                Dictionary<int, KeyValuePair<int, string>> map = LoadPersisted();
+                map[port] = new KeyValuePair<int, string>(proc.Id, proc.ProcessName);
+                SavePersisted(map);
+            }
+            catch { }
+        }
+
+        private static void RemovePersisted(int port)
+        {
+            Dictionary<int, KeyValuePair<int, string>> map = LoadPersisted();
+            if (map.Remove(port)) SavePersisted(map);
+        }
+
+        /// <summary>Returns the PID of a still-alive process Hearth started for this port, or 0.</summary>
+        private static int GetPersistedPid(int port)
+        {
+            Dictionary<int, KeyValuePair<int, string>> map = LoadPersisted();
+            KeyValuePair<int, string> entry;
+            if (!map.TryGetValue(port, out entry)) return 0;
+            try
+            {
+                using (Process p = Process.GetProcessById(entry.Key))
+                {
+                    // Guard against PID reuse by checking the process name too.
+                    if (!p.HasExited && string.Equals(p.ProcessName, entry.Value, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return entry.Key;
+                    }
+                }
+            }
+            catch { }
+            return 0;
+        }
+
+        /// <summary>Kills any HearthPortableWebServer.Host.exe instance serving the given port.</summary>
+        private static void KillHostProcessesForPort(int port)
+        {
+            try
+            {
+                string token = "--port " + port.ToString(CultureInfo.InvariantCulture) + " ";
+                using (System.Management.ManagementObjectSearcher searcher = new System.Management.ManagementObjectSearcher(
+                    "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'HearthPortableWebServer.Host.exe'"))
+                {
+                    foreach (System.Management.ManagementObject mo in searcher.Get())
+                    {
+                        string cmd = (mo["CommandLine"] as string) ?? string.Empty;
+                        if (cmd.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            KillProcessTree(Convert.ToInt32(mo["ProcessId"]));
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         public static bool IsPortOccupiedByOther(int port)
@@ -233,6 +353,7 @@ namespace HearthPortableWebServer.Manager.Services
                 {
                     _trackedProcesses[site.Port] = proc;
                 }
+                PersistPid(site.Port, proc);
 
                 // Register live-reload file watcher if enabled
                 SiteWatcherManager.StartWatcher(site);
@@ -350,23 +471,27 @@ namespace HearthPortableWebServer.Manager.Services
                 }
             }
 
-            // If port is still listening, find and kill the process holding the port
-            if (IsPortListening(port))
+            // Stop a child started by another Manager session / the service (persisted PID)
+            int persistedPid = GetPersistedPid(port);
+            if (persistedPid > 0)
             {
-                int pid = FindPidByPort(port);
-                if (pid > 0)
-                {
-                    KillProcessTree(pid);
-                }
+                KillProcessTree(persistedPid);
             }
+            RemovePersisted(port);
 
-            // Wait up to 2.5 seconds for port to clear
+            // Wait for the ASP.NET host to honour the graceful shutdown signal
             for (int i = 0; i < 25; i++)
             {
-                if (!IsRunning(port) && !IsPortListening(port))
-                {
-                    return true;
-                }
+                if (!IsRunning(port)) return true;
+                Thread.Sleep(100);
+            }
+
+            // Host did not exit: kill only Hearth host processes for this port.
+            // Never kill whatever else happens to own the port (IIS, other apps).
+            KillHostProcessesForPort(port);
+            for (int i = 0; i < 10; i++)
+            {
+                if (!IsRunning(port)) return true;
                 Thread.Sleep(100);
             }
 

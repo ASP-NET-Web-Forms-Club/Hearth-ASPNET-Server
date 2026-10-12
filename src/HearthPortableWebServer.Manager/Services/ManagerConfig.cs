@@ -216,6 +216,75 @@ namespace HearthPortableWebServer.Manager.Services
             return list;
         }
 
+        // ---- Temporary manual-stop overrides ----
+        // Ports the user explicitly stopped from the UI. The service watchdog skips these
+        // so it does not auto-restart them, while the persisted AutoStart setting is left
+        // untouched and still applies on the next machine boot / service launch.
+        private const string ManualStopFileName = "manual_stopped.txt";
+        private static readonly object _manualStopLock = new object();
+
+        private static string ManualStopPath()
+        {
+            return Path.Combine(GetAppDirectory(), ManualStopFileName);
+        }
+
+        public static HashSet<int> LoadManualStops()
+        {
+            HashSet<int> ports = new HashSet<int>();
+            lock (_manualStopLock)
+            {
+                try
+                {
+                    string path = ManualStopPath();
+                    if (!File.Exists(path)) return ports;
+                    foreach (string line in File.ReadAllLines(path))
+                    {
+                        int p;
+                        if (int.TryParse(line.Trim(), out p)) ports.Add(p);
+                    }
+                }
+                catch { }
+            }
+            return ports;
+        }
+
+        private static void SaveManualStops(HashSet<int> ports)
+        {
+            lock (_manualStopLock)
+            {
+                try
+                {
+                    string path = ManualStopPath();
+                    if (ports.Count == 0)
+                    {
+                        if (File.Exists(path)) File.Delete(path);
+                        return;
+                    }
+                    List<string> lines = new List<string>();
+                    foreach (int p in ports) lines.Add(p.ToString());
+                    File.WriteAllLines(path, lines.ToArray());
+                }
+                catch { }
+            }
+        }
+
+        public static bool IsManuallyStopped(int port)
+        {
+            return LoadManualStops().Contains(port);
+        }
+
+        public static void SetManuallyStopped(int port, bool stopped)
+        {
+            HashSet<int> ports = LoadManualStops();
+            bool changed = stopped ? ports.Add(port) : ports.Remove(port);
+            if (changed) SaveManualStops(ports);
+        }
+
+        public static void ClearManualStops()
+        {
+            SaveManualStops(new HashSet<int>());
+        }
+
         public void Save()
         {
             try

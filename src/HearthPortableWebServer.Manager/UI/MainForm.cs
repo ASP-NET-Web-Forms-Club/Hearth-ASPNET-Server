@@ -74,10 +74,12 @@ namespace HearthPortableWebServer.Manager.UI
 
         private ListViewItem CreateListViewItem(SiteEntry site)
         {
-            bool running = ProcessSupervisor.IsRunning(site.Port);
-            ListViewItem item = new ListViewItem(running ? "● Running" : "○ Stopped");
+            string statusText;
+            Color color;
+            GetSiteStatus(site, out statusText, out color);
+            ListViewItem item = new ListViewItem(statusText);
             item.Tag = site;
-            item.ForeColor = running ? Color.DarkGreen : Color.Maroon;
+            item.ForeColor = color;
             item.SubItems.Add(site.Name);
             item.SubItems.Add(string.IsNullOrEmpty(site.Engine) ? "ASP.NET" : site.Engine);
             item.SubItems.Add(site.Port.ToString());
@@ -103,9 +105,9 @@ namespace HearthPortableWebServer.Manager.UI
                 SiteEntry site = item.Tag as SiteEntry;
                 if (site == null) continue;
 
-                bool isRunning = ProcessSupervisor.IsRunning(site.Port);
-                string statusText = isRunning ? "● Running" : "○ Stopped";
-                Color color = isRunning ? Color.DarkGreen : Color.Maroon;
+                string statusText;
+                Color color;
+                bool isRunning = GetSiteStatus(site, out statusText, out color);
 
                 if (item.Text != statusText)
                 {
@@ -123,6 +125,26 @@ namespace HearthPortableWebServer.Manager.UI
             lblServiceStatus.Text = "Manager Service: " + ServiceControllerHelper.GetServiceStatusText();
 
             UpdateActionButtonsState();
+        }
+
+        /// <summary>Returns true when Hearth is running the site; also yields the list status text/colour.</summary>
+        private static bool GetSiteStatus(SiteEntry site, out string statusText, out Color color)
+        {
+            if (ProcessSupervisor.IsRunning(site.Port))
+            {
+                statusText = "● Running";
+                color = Color.DarkGreen;
+                return true;
+            }
+            if (ProcessSupervisor.IsPortListening(site.Port))
+            {
+                statusText = "⚠ Port in use";
+                color = Color.DarkOrange;
+                return false;
+            }
+            statusText = "○ Stopped";
+            color = Color.Maroon;
+            return false;
         }
 
         private void UpdateActionButtonsState()
@@ -278,7 +300,9 @@ namespace HearthPortableWebServer.Manager.UI
                         break;
                     }
                 }
-                if (!portTaken) break;
+                // Also skip ports already held by another application, otherwise the new
+                // site appears "Running" (IsRunning falls back to port listening) and cannot be stopped.
+                if (!portTaken && !ProcessSupervisor.IsPortListening(nextPort)) break;
                 nextPort++;
             }
 
@@ -363,6 +387,15 @@ namespace HearthPortableWebServer.Manager.UI
                 }
             }
 
+            // Warn (but still allow saving) if another application already holds the port.
+            // numPort is disabled while this site is running, so a listening port then is the site itself.
+            if (numPort.Enabled && ProcessSupervisor.IsPortListening(port))
+            {
+                MessageBox.Show(this, "Port " + port + " is already in use by another application." + Environment.NewLine +
+                    "The configuration will be saved, but this site will not be able to start on this port.",
+                    "Port In Use", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+
             _selectedSite.Name = name;
             _selectedSite.Engine = engine;
             _selectedSite.Port = port;
@@ -394,6 +427,8 @@ namespace HearthPortableWebServer.Manager.UI
         {
             if (_selectedSite == null) return;
 
+            ManagerConfig.SetManuallyStopped(_selectedSite.Port, false);
+
             string err;
             if (!ProcessSupervisor.StartSite(_selectedSite, out err))
             {
@@ -407,24 +442,9 @@ namespace HearthPortableWebServer.Manager.UI
         {
             if (_selectedSite == null) return;
 
-            // First toggle/disable auto-start to false
-            if (_selectedSite.AutoStart || chkAutoStart.Checked)
-            {
-                _selectedSite.AutoStart = false;
-                chkAutoStart.Checked = false;
-                _config.Save();
-
-                if (lvSites.SelectedItems.Count > 0)
-                {
-                    ListViewItem item = lvSites.SelectedItems[0];
-                    if (item.SubItems.Count > 4)
-                    {
-                        item.SubItems[4].Text = "No";
-                    }
-                }
-            }
-
-            // Followed by stopping the server
+            // Temporary stop: tell the service watchdog not to auto-restart this site.
+            // The AutoStart setting is kept and applies again on the next boot / service launch.
+            ManagerConfig.SetManuallyStopped(_selectedSite.Port, true);
             ProcessSupervisor.StopSite(_selectedSite.Port);
             RefreshAllStatus();
         }
@@ -491,12 +511,17 @@ namespace HearthPortableWebServer.Manager.UI
 
         private void btnStartAll_Click(object sender, EventArgs e)
         {
+            ManagerConfig.ClearManualStops();
             ProcessSupervisor.StartAll(_config.Sites);
             RefreshAllStatus();
         }
 
         private void btnStopAll_Click(object sender, EventArgs e)
         {
+            foreach (SiteEntry s in _config.Sites)
+            {
+                ManagerConfig.SetManuallyStopped(s.Port, true);
+            }
             ProcessSupervisor.StopAll(_config.Sites);
             RefreshAllStatus();
         }

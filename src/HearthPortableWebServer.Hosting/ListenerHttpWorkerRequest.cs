@@ -19,6 +19,41 @@ namespace HearthPortableWebServer.Hosting
         private readonly string _uriPath;     // effective path (may include default document)
         private readonly string _queryString;
 
+        // Set by AspNetHost from <system.webServer> for static files; they replace the
+        // values ASP.NET's StaticFileHandler would send (null = keep ASP.NET's value).
+        private string _contentTypeOverride;
+        private string _cacheControlOverride;
+        private string _expiresOverride;
+
+        public string ContentTypeOverride
+        {
+            get { return _contentTypeOverride; }
+            set { _contentTypeOverride = value; if (value != null) _context.Response.ContentType = value; }
+        }
+
+        public string CacheControlOverride
+        {
+            get { return _cacheControlOverride; }
+            set { _cacheControlOverride = value; if (value != null) TrySetHeader("Cache-Control", value); }
+        }
+
+        public string ExpiresOverride
+        {
+            get { return _expiresOverride; }
+            set { _expiresOverride = value; if (value != null) TrySetHeader("Expires", value); }
+        }
+
+        private void TrySetHeader(string name, string value)
+        {
+            try
+            {
+                _context.Response.Headers[name] = value;
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
+
         public ListenerHttpWorkerRequest(HttpListenerContext context, string physicalDir,
             string virtualDir, string effectiveUriPath)
         {
@@ -294,7 +329,13 @@ namespace HearthPortableWebServer.Hosting
                     }
                     return;
                 case "content-type":
-                    _context.Response.ContentType = value;
+                    _context.Response.ContentType = _contentTypeOverride ?? value;
+                    return;
+                case "cache-control":
+                    TrySetHeader(name, _cacheControlOverride ?? value);
+                    return;
+                case "expires":
+                    TrySetHeader(name, _expiresOverride ?? value);
                     return;
                 case "transfer-encoding":
                     // Never honor an upstream chunked header: HttpListener handles transfer

@@ -28,12 +28,7 @@ namespace HearthPortableWebServer.Hosting
         // single worker process service many simultaneous connections efficiently.
         private const int ConcurrentAccepts = 32;
 
-        private static readonly string[] DefaultDocuments =
-        {
-            "Default.aspx", "default.aspx", "Index.aspx", "index.aspx",
-            "index.html", "index.htm", "Default.htm"
-        };
-
+        private WebServerConfig _webServerConfig;
         private HttpListener _listener;
         private string _physicalDir;
         private string _virtualDir;
@@ -63,6 +58,7 @@ namespace HearthPortableWebServer.Hosting
             _port = port;
             _physicalDir = physicalDir;
             _virtualDir = string.IsNullOrEmpty(virtualDir) ? "/" : virtualDir;
+            _webServerConfig = WebServerConfig.Load(physicalDir);
 
             _listener = CreateListener(port, out _boundPrefix);
             _listener.Start();
@@ -203,6 +199,7 @@ namespace HearthPortableWebServer.Hosting
                 string effectivePath = ResolveEffectivePath(context.Request.Url.LocalPath);
                 ListenerHttpWorkerRequest worker =
                     new ListenerHttpWorkerRequest(context, _physicalDir, _virtualDir, effectivePath);
+                ApplyWebServerConfig(context, worker);
                 HttpRuntime.ProcessRequest(worker);
             }
             catch (Exception ex)
@@ -268,16 +265,54 @@ namespace HearthPortableWebServer.Hosting
                 ? _physicalDir
                 : Path.Combine(_physicalDir, relative);
 
-            for (int i = 0; i < DefaultDocuments.Length; i++)
+            if (!_webServerConfig.DefaultDocumentEnabled)
             {
-                string candidate = Path.Combine(physicalDir, DefaultDocuments[i]);
+                return localPath;
+            }
+
+            foreach (string document in _webServerConfig.DefaultDocuments)
+            {
+                string candidate = Path.Combine(physicalDir, document.Replace('/', Path.DirectorySeparatorChar));
                 if (File.Exists(candidate))
                 {
-                    return localPath + DefaultDocuments[i];
+                    return localPath + document.Replace('\\', '/');
                 }
             }
 
             return localPath;
+        }
+
+        /// <summary>
+        /// Applies the supported &lt;system.webServer&gt; settings (custom headers and, for
+        /// static files, mimeMap / clientCache) to this request's response.
+        /// </summary>
+        private void ApplyWebServerConfig(HttpListenerContext context, ListenerHttpWorkerRequest worker)
+        {
+            foreach (System.Collections.Generic.KeyValuePair<string, string> header in _webServerConfig.CustomHeaders)
+            {
+                try
+                {
+                    context.Response.Headers[header.Key] = header.Value;
+                }
+                catch (ArgumentException)
+                {
+                    // Restricted header; HttpListener manages it itself.
+                }
+            }
+
+            string physicalPath = worker.GetFilePathTranslated();
+            if (!WebServerConfig.IsStaticFile(physicalPath))
+            {
+                return;
+            }
+
+            string mime;
+            if (_webServerConfig.MimeMaps.TryGetValue(Path.GetExtension(physicalPath), out mime))
+            {
+                worker.ContentTypeOverride = mime;
+            }
+            worker.CacheControlOverride = _webServerConfig.CacheControl;
+            worker.ExpiresOverride = _webServerConfig.Expires;
         }
 
         private static void TryWriteError(HttpListenerContext context, Exception ex)

@@ -21,6 +21,10 @@ namespace HearthPortableWebServer.Manager.Services
         protected override void OnStart(string[] args)
         {
             _stopping = false;
+
+            // Fresh boot / service launch: manual stops were temporary, honour AutoStart again.
+            ManagerConfig.ClearManualStops();
+
             _watchdogThread = new Thread(WatchdogLoop)
             {
                 IsBackground = true,
@@ -58,9 +62,11 @@ namespace HearthPortableWebServer.Manager.Services
                 try
                 {
                     ManagerConfig config = ManagerConfig.Load();
+                    System.Collections.Generic.HashSet<int> manualStops = ManagerConfig.LoadManualStops();
                     foreach (SiteEntry site in config.Sites)
                     {
                         if (_stopping) break;
+                        if (manualStops.Contains(site.Port)) continue;
                         if (site.AutoStart && !ProcessSupervisor.IsRunning(site.Port))
                         {
                             string err;

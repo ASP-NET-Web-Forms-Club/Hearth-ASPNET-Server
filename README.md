@@ -141,6 +141,46 @@ The listener tries `http://+:<port>/` (all interfaces, IIS-like) first and falls
 back to loopback (`localhost` / `127.0.0.1`) when not elevated. Service install
 and the all-interfaces binding require Administrator rights.
 
+## web.config support (partial)
+Hearth hosts ASP.NET through `ApplicationHost.CreateApplicationHost` +
+`HttpRuntime.ProcessRequest` (the same model as Cassini / the classic Visual
+Studio dev server), not through IIS. As a result `web.config` is only
+**partially** honoured:
+
+- **Fully supported** — everything the ASP.NET runtime reads itself:
+  `<system.web>` (`compilation`, `pages`, `customErrors`, `httpRuntime`
+  incl. `maxRequestLength`, `authentication`, `authorization`, `sessionState`,
+  `machineKey`, `httpModules`, `httpHandlers`), plus `<connectionStrings>` and
+  `<appSettings>`. Changes to `web.config` or `bin\` recycle the site automatically.
+- **Partially supported** — `<system.webServer>` is an IIS-only section that
+  ASP.NET itself ignores. Hearth reads the following subset from the site's
+  **root** `web.config` itself:
+
+  | Element | Supported |
+  |---|---|
+  | `<defaultDocument>` | `enabled`, `<files>` with `<add>` / `<remove>` / `<clear>`. Site entries are tried first, then the built-in list (`Default.aspx`, `Index.aspx`, `index.html`, `index.htm`, `Default.htm`) unless `<clear/>` is used. Sub-paths such as `office/Default.aspx` work. |
+  | `<httpProtocol><customHeaders>` | `<add>` / `<remove>` / `<clear>`; headers are added to every response. |
+  | `<staticContent><mimeMap>` | `<mimeMap>` / `<remove>` / `<clear>`; overrides the Content-Type of static files. |
+  | `<staticContent><clientCache>` | `cacheControlMode` = `UseMaxAge` (with `cacheControlMaxAge`), `DisableCache`, `UseExpires` (with `httpExpires`), plus `cacheControlCustom`; static files only. |
+
+  "Static files" means existing files whose extension is not handled by
+  ASP.NET (`.aspx`, `.ashx`, `.asmx`, `.axd`, `.svc`, `.cshtml`, ... are excluded).
+  Editing `web.config` recycles the site, so changes apply automatically.
+- **Ignored** — everything else in `<system.webServer>`, including `<rewrite>`,
+  integrated-mode `<modules>` / `<handlers>`, `<httpErrors>`,
+  `<security><requestFiltering>`, `<httpPlatform>`, `<location>`-scoped
+  settings and `web.config` files in sub-folders.
+
+Practical notes:
+- Register HTTP handlers/modules under `<system.web>` (classic pipeline), not
+  only under `<system.webServer>`.
+- Upload size is governed by `<httpRuntime maxRequestLength>` (KB);
+  `requestLimits maxAllowedContentLength` has no effect.
+- Use `<customErrors>` (in `<system.web>`) for custom error pages instead of `<httpErrors>`.
+- Non-ASP.NET engines (PHP, Python, Node.js, .NET Core) do not read
+  `web.config` at all. For PHP pretty URLs (e.g. WordPress permalinks), use a
+  router script instead of URL Rewrite rules.
+
 ## Build
 ```
 msbuild HearthPortableWebServer.sln /p:Configuration=Release
