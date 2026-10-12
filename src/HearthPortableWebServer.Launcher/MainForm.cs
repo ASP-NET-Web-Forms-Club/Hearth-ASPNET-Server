@@ -228,6 +228,10 @@ namespace HearthPortableWebServer.Launcher
             {
                 SetStatus("Running  -  http://localhost:" + Port + "/", Color.Green);
             }
+            else if (HostProcessManager.IsPortListening(Port))
+            {
+                SetStatus("Stopped  -  port " + Port + " is in use by another application", Color.DarkOrange);
+            }
             else
             {
                 SetStatus("Stopped", Color.Maroon);

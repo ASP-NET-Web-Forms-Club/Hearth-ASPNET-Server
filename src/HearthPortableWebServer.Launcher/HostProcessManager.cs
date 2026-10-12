@@ -24,11 +24,40 @@ namespace HearthPortableWebServer.Launcher
             return SyncHelper.MutexExists(IpcNames.RunningMutex(port));
         }
 
+        /// <summary>True when anything (Hearth or another application) is listening on the port.</summary>
+        public static bool IsPortListening(int port)
+        {
+            try
+            {
+                System.Net.IPEndPoint[] listeners =
+                    System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
+                foreach (System.Net.IPEndPoint ep in listeners)
+                {
+                    if (ep.Port == port) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>True when the port is held by something other than a Hearth host (e.g. IIS).</summary>
+        public static bool IsPortOccupiedByOther(int port)
+        {
+            return !IsRunning(port) && IsPortListening(port);
+        }
+
         public static void StartServer(int port, string root)
         {
             if (IsRunning(port))
             {
                 return;
+            }
+
+            if (IsPortOccupiedByOther(port))
+            {
+                throw new InvalidOperationException(
+                    "Port " + port.ToString(CultureInfo.InvariantCulture) +
+                    " is already in use by another application. Please choose a different port.");
             }
 
             string exe = HostExePath();
@@ -55,9 +84,60 @@ namespace HearthPortableWebServer.Launcher
             }
         }
 
+        /// <summary>
+        /// Stops the Hearth host on this port: graceful shutdown signal first, then (if the
+        /// host does not exit) a force-kill of HearthPortableWebServer.Host.exe instances
+        /// serving this port. Never touches processes that are not Hearth hosts.
+        /// Returns false when no Hearth server was found on the port.
+        /// </summary>
         public static bool StopServer(int port)
         {
-            return SyncHelper.TrySignalEvent(IpcNames.ShutdownEvent(port));
+            bool signalled = SyncHelper.TrySignalEvent(IpcNames.ShutdownEvent(port));
+            if (!signalled && !IsRunning(port))
+            {
+                return false;
+            }
+
+            // Wait up to 3 seconds for a graceful exit
+            for (int i = 0; i < 30; i++)
+            {
+                if (!IsRunning(port)) return true;
+                System.Threading.Thread.Sleep(100);
+            }
+
+            KillHostProcessesForPort(port);
+            for (int i = 0; i < 10; i++)
+            {
+                if (!IsRunning(port)) return true;
+                System.Threading.Thread.Sleep(100);
+            }
+            return true;
+        }
+
+        private static void KillHostProcessesForPort(int port)
+        {
+            try
+            {
+                string token = "--port " + port.ToString(CultureInfo.InvariantCulture) + " ";
+                using (System.Management.ManagementObjectSearcher searcher = new System.Management.ManagementObjectSearcher(
+                    "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'HearthPortableWebServer.Host.exe'"))
+                {
+                    foreach (System.Management.ManagementObject mo in searcher.Get())
+                    {
+                        string cmd = (mo["CommandLine"] as string) ?? string.Empty;
+                        if (cmd.IndexOf(token, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        try
+                        {
+                            using (Process p = Process.GetProcessById(Convert.ToInt32(mo["ProcessId"])))
+                            {
+                                p.Kill();
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
         }
 
         public static void OpenBrowser(int port)

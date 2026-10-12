@@ -89,12 +89,13 @@ All projects build to a shared `build\<Configuration>\` folder.
 
 ### Multi-Site Manager (GUI & Windows Service)
 Run `HearthPortableWebServer.Manager.exe`:
-* **Multi-Site Dashboard**: View real-time status (● Running / ○ Stopped) for all configured applications across distinct engines in the dedicated **Type** column.
+* **Multi-Site Dashboard**: View real-time status (● Running / ○ Stopped / ⚠ Port in use) for all configured applications across distinct engines in the dedicated **Type** column. "Port in use" means another application (e.g. IIS) holds the site's port; Hearth never treats or stops such a process as one of its own sites.
 * **Multi-Engine Selection**: Choose between **ASP.NET**, **.NET Core**, **Python**, **Node.js**, **PHP**, or **Other**.
 * **Smart Entry Defaults**: Auto-suggests entry scripts (e.g. `app.py`, `server.js`, `index.php`), while allowing optional custom executables or arguments.
 * **Per-Site Controls**: Dedicated **Start Server**, **Stop Server**, **Browse in Browser**, and **Open Web Root in Explorer** buttons for each application entry.
 * **Live Reload Checkbox**: Toggle `Live Reload: Auto-restart on file change` for rapid iterative development.
-* **Safe Stop Protection**: Clicking **Stop Server** sets `Auto-Start` to `No` first, ensuring the watchdog service will not immediately revive a manually stopped site.
+* **Temporary Stop**: **Stop Server** / **Stop All** stop sites temporarily — the watchdog service will not revive them, but their `Auto-Start` setting is kept and applies again on the next boot / service launch. **Start Server** / **Start All** lift the temporary stop.
+* **Port Conflict Detection**: **Add Website** picks a free port automatically; saving a site on a port already used by another application shows a warning.
 * **Global Controls**: **Start All Sites** and **Stop All Sites** for bulk operations.
 * **Add & Configure Websites**: Specify custom Site Name, Engine Type, dedicated HTTP Port, and relative or absolute application folder path (`manager_sites.json`). Auto-migrates existing `Settings.txt` or `server.config` on first launch.
 * **System Tray Minimization**: Closing or minimizing with running servers gives the option to minimize to the notification area with tray menu controls.
@@ -107,14 +108,27 @@ HearthPortableWebServer.Manager.exe --service    (runs as background Windows Ser
 ```
 
 ### Launcher (Single-Site GUI)
+A quick, one-folder / one-port tool for **ASP.NET** sites only. For several sites or
+for other engines (.NET Core, Python, Node.js, PHP), use the **Multi-Site Manager**.
+
 Run `HearthPortableWebServer.Launcher.exe`:
 * **Port** (default `8080`) and **Web root** (default `<startup path>\wwwroot`).
 * **Start / Stop Web Server**, **Browse Web App**.
 * **Install / Uninstall Service** (auto-start with Windows; prompts for UAC).
+* **Port conflict detection**: if another application (e.g. IIS) already uses the
+  port, **Start** reports it and the status bar shows
+  `Stopped - port N is in use by another application`.
+* **Reliable stop**: **Stop** sends a graceful shutdown signal; if the host does not
+  exit within 3 seconds, the Hearth host for that port is force-closed. Other
+  applications on the port are never touched.
 
-Closing the launcher while a server it started is still running prompts: **[Yes]**
-stop it, **[No]** leave it running in the background. A **Minimize to taskbar** button
-is also provided.
+Closing the launcher while its server is running prompts: **[Yes]** stop the server
+and close, **[No]** keep the launcher open. To keep a server running after closing,
+install it as a Windows Service.
+
+> **Launcher vs. Manager:** use one or the other for a given port. They do not
+> coordinate with each other — e.g. a Manager site with Auto-Start on port 8080 will
+> be restarted by the Manager service even if you stop it from the Launcher.
 
 ### Host (command line)
 ```
