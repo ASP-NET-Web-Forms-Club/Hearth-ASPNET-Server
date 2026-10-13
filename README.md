@@ -203,6 +203,7 @@ msbuild HearthPortableWebServer.sln /p:Configuration=Release
 ## Verified behavior
 * ASP.NET Web Forms page renders with ViewState; server-side button postback
   updates a `Label` (full page lifecycle).
+* ASP.NET AJAX `[WebMethod]` (page methods) and `.asmx` web services supported (decomposes `PathInfo` sub-paths like `/Page.aspx/MyMethod`).
 * `api.aspx` echoes GET query and POST form values.
 * Static files served with `ETag` / `Last-Modified` caching headers.
 * 200 concurrent requests → 200 × HTTP 200 in ~0.12 s.

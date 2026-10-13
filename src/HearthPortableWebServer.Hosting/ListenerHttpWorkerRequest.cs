@@ -17,7 +17,10 @@ namespace HearthPortableWebServer.Hosting
         private readonly string _physicalDir;
         private readonly string _virtualDir;
         private readonly string _uriPath;     // effective path (may include default document)
+        private readonly string _filePath;    // virtual path to physical target file (e.g. /Page.aspx)
+        private readonly string _pathInfo;    // sub-path info for WebMethods / routing (e.g. /GetCustomerData)
         private readonly string _queryString;
+        private byte[] _preloadedBody;        // buffered chunked body (null = stream from HttpListener)
 
         // Set by AspNetHost from <system.webServer> for static files; they replace the
         // values ASP.NET's StaticFileHandler would send (null = keep ASP.NET's value).
@@ -71,6 +74,8 @@ namespace HearthPortableWebServer.Hosting
                 query = query.Substring(1);
             }
             _queryString = query;
+
+            ParsePathInfo(out _filePath, out _pathInfo);
         }
 
         // ---- Request line ------------------------------------------------------
@@ -148,17 +153,101 @@ namespace HearthPortableWebServer.Hosting
 
         public override string GetFilePath()
         {
-            return _uriPath;
+            return _filePath;
         }
 
         public override string GetFilePathTranslated()
         {
-            return MapPath(_uriPath);
+            return MapPath(_filePath);
         }
 
         public override string GetPathInfo()
         {
-            return string.Empty;
+            return _pathInfo;
+        }
+
+        /// <summary>
+        /// Decomposes <see cref="_uriPath"/> into a physical virtual file path and additional
+        /// sub-path info. For example, a request to "/Page.aspx/GetCustomerData" (ASP.NET AJAX
+        /// WebMethod) resolves FilePath to "/Page.aspx" and PathInfo to "/GetCustomerData".
+        /// Without this, ASP.NET treats the entire path as a nonexistent file and returns 404.
+        ///
+        /// Like IIS, segments are scanned left to right and the split happens after the FIRST
+        /// segment that is either a known ASP.NET handler extension or an existing file. This
+        /// keeps dots inside the PathInfo intact (e.g. "/Handler.ashx/files/report.pdf") and
+        /// skips dotted directory names (e.g. "/v1.2/Page.aspx/Save").
+        /// </summary>
+        private void ParsePathInfo(out string filePath, out string pathInfo)
+        {
+            filePath = _uriPath;
+            pathInfo = string.Empty;
+
+            if (string.IsNullOrEmpty(_uriPath))
+            {
+                return;
+            }
+
+            int segmentStart = 0;
+            while (true)
+            {
+                int slash = _uriPath.IndexOf('/', segmentStart + 1);
+                if (slash < 0)
+                {
+                    // The last segment is the target itself; there is no PathInfo.
+                    return;
+                }
+
+                // Only segments containing a dot can be a file or handler.
+                if (_uriPath.IndexOf('.', segmentStart, slash - segmentStart) >= 0)
+                {
+                    string candidate = _uriPath.Substring(0, slash);
+                    if (IsKnownAspNetExtension(SafeGetExtension(candidate)) || IsExistingFile(candidate))
+                    {
+                        filePath = candidate;
+                        pathInfo = _uriPath.Substring(slash);
+                        return;
+                    }
+                }
+
+                segmentStart = slash;
+            }
+        }
+
+        private static string SafeGetExtension(string path)
+        {
+            try
+            {
+                return Path.GetExtension(path);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        private bool IsExistingFile(string virtualPath)
+        {
+            try
+            {
+                return File.Exists(MapPath(virtualPath));
+            }
+            catch (ArgumentException)
+            {
+                // Illegal path characters: cannot be a file on disk.
+                return false;
+            }
+        }
+
+        private static bool IsKnownAspNetExtension(string ext)
+        {
+            if (string.IsNullOrEmpty(ext)) return false;
+            return ext.Equals(".aspx", StringComparison.OrdinalIgnoreCase) ||
+                   ext.Equals(".asmx", StringComparison.OrdinalIgnoreCase) ||
+                   ext.Equals(".ashx", StringComparison.OrdinalIgnoreCase) ||
+                   ext.Equals(".axd", StringComparison.OrdinalIgnoreCase) ||
+                   ext.Equals(".svc", StringComparison.OrdinalIgnoreCase) ||
+                   ext.Equals(".rem", StringComparison.OrdinalIgnoreCase) ||
+                   ext.Equals(".soap", StringComparison.OrdinalIgnoreCase);
         }
 
         public override string GetAppPath()
@@ -192,6 +281,19 @@ namespace HearthPortableWebServer.Hosting
 
         public override string GetKnownRequestHeader(int index)
         {
+            // A buffered chunked body is presented to ASP.NET as a plain body of known length.
+            if (_preloadedBody != null)
+            {
+                if (index == HeaderContentLength)
+                {
+                    return _preloadedBody.Length.ToString(CultureInfo.InvariantCulture);
+                }
+                if (index == HeaderTransferEncoding)
+                {
+                    return null;
+                }
+            }
+
             string name = GetKnownRequestHeaderName(index);
             if (name == null)
             {
@@ -221,9 +323,58 @@ namespace HearthPortableWebServer.Hosting
 
         // ---- Request body ------------------------------------------------------
 
+        /// <summary>
+        /// True when the request carries a body without a Content-Length header (chunked
+        /// transfer encoding). ASP.NET sizes the body from Content-Length, so such a body
+        /// must be buffered with <see cref="TryPreloadBody"/> or ASP.NET reads it as empty.
+        /// </summary>
+        public bool HasBodyWithoutContentLength
+        {
+            get { return _context.Request.HasEntityBody && _context.Request.ContentLength64 < 0; }
+        }
+
+        /// <summary>
+        /// Reads the whole request body into memory so it can be handed to ASP.NET as a
+        /// preloaded body with a known length. Returns false if the body exceeds
+        /// <paramref name="maxBytes"/> (the caller should answer 413).
+        /// </summary>
+        public bool TryPreloadBody(long maxBytes)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = _context.Request.InputStream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (ms.Length + read > maxBytes)
+                    {
+                        return false;
+                    }
+                    ms.Write(buffer, 0, read);
+                }
+                _preloadedBody = ms.ToArray();
+            }
+            return true;
+        }
+
+        public override byte[] GetPreloadedEntityBody()
+        {
+            return _preloadedBody;
+        }
+
+        public override int GetPreloadedEntityBodyLength()
+        {
+            return _preloadedBody == null ? 0 : _preloadedBody.Length;
+        }
+
+        public override int GetTotalEntityBodyLength()
+        {
+            return _preloadedBody == null ? base.GetTotalEntityBodyLength() : _preloadedBody.Length;
+        }
+
         public override int ReadEntityBody(byte[] buffer, int size)
         {
-            if (buffer == null || size <= 0)
+            if (buffer == null || size <= 0 || _preloadedBody != null)
             {
                 return 0;
             }
@@ -232,7 +383,7 @@ namespace HearthPortableWebServer.Hosting
 
         public override int ReadEntityBody(byte[] buffer, int offset, int size)
         {
-            if (buffer == null || size <= 0)
+            if (buffer == null || size <= 0 || _preloadedBody != null)
             {
                 return 0;
             }
@@ -241,7 +392,7 @@ namespace HearthPortableWebServer.Hosting
 
         public override bool IsEntireEntityBodyIsPreloaded()
         {
-            return false;
+            return _preloadedBody != null;
         }
 
         // ---- Server variables --------------------------------------------------
@@ -286,9 +437,24 @@ namespace HearthPortableWebServer.Hosting
                     return GetHttpVerbName();
                 case "QUERY_STRING":
                     return _queryString;
+                case "URL":
+                case "SCRIPT_NAME":
+                    return _filePath;
+                case "PATH_INFO":
+                    return _pathInfo;
+                case "PATH_TRANSLATED":
+                    return GetFilePathTranslated();
                 default:
-                    string header = _context.Request.Headers[name];
-                    return header ?? string.Empty;
+                    // Only HTTP_* variables come from request headers (HTTP_USER_AGENT ->
+                    // "User-Agent"). Any other unknown variable must NOT fall back to a header:
+                    // a client could otherwise spoof server-owned values such as LOGON_USER,
+                    // AUTH_TYPE or REMOTE_USER simply by sending a header with that name.
+                    if (name.StartsWith("HTTP_", StringComparison.OrdinalIgnoreCase) && name.Length > 5)
+                    {
+                        string header = _context.Request.Headers[name.Substring(5).Replace('_', '-')];
+                        return header ?? string.Empty;
+                    }
+                    return string.Empty;
             }
         }
 

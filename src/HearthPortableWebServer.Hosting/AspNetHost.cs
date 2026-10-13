@@ -35,6 +35,7 @@ namespace HearthPortableWebServer.Hosting
         private volatile bool _running;
         private volatile bool _shuttingDown;
         private int _port;
+        private long _maxRequestBytes;
         private string _boundPrefix;
 
         /// <summary>Keep the cross-AppDomain proxy alive for the lifetime of the process.</summary>
@@ -59,6 +60,7 @@ namespace HearthPortableWebServer.Hosting
             _physicalDir = physicalDir;
             _virtualDir = string.IsNullOrEmpty(virtualDir) ? "/" : virtualDir;
             _webServerConfig = WebServerConfig.Load(physicalDir);
+            _maxRequestBytes = ReadMaxRequestBytes();
 
             _listener = CreateListener(port, out _boundPrefix);
             _listener.Start();
@@ -196,15 +198,76 @@ namespace HearthPortableWebServer.Hosting
                     return;
                 }
 
+                // Illegal path characters would make every later Path.* call throw; answer
+                // 400 up front instead of a 500 that leaks the exception text.
+                if (context.Request.Url.LocalPath.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+                {
+                    WriteStatus(context, 400, "Bad Request");
+                    return;
+                }
+
                 string effectivePath = ResolveEffectivePath(context.Request.Url.LocalPath);
                 ListenerHttpWorkerRequest worker =
                     new ListenerHttpWorkerRequest(context, _physicalDir, _virtualDir, effectivePath);
+
+                // IIS returns 404 for a static file followed by PathInfo ("/logo.png/x");
+                // ASP.NET's StaticFileHandler would otherwise serve the file for any suffix.
+                if (!string.IsNullOrEmpty(worker.GetPathInfo()) &&
+                    WebServerConfig.IsStaticFile(worker.GetFilePathTranslated()))
+                {
+                    WriteStatus(context, 404, "Not Found");
+                    return;
+                }
+
+                // ASP.NET sizes the body from Content-Length; buffer a chunked body so
+                // AJAX/web method JSON sent without Content-Length is not read as empty.
+                if (worker.HasBodyWithoutContentLength && !worker.TryPreloadBody(_maxRequestBytes))
+                {
+                    WriteStatus(context, 413, "Request Entity Too Large");
+                    return;
+                }
+
                 ApplyWebServerConfig(context, worker);
                 HttpRuntime.ProcessRequest(worker);
             }
             catch (Exception ex)
             {
                 TryWriteError(context, ex);
+            }
+        }
+
+        private static void WriteStatus(HttpListenerContext context, int statusCode, string text)
+        {
+            try
+            {
+                context.Response.StatusCode = statusCode;
+                byte[] body = System.Text.Encoding.UTF8.GetBytes(
+                    statusCode.ToString(CultureInfo.InvariantCulture) + " " + text);
+                context.Response.ContentType = "text/plain; charset=utf-8";
+                context.Response.ContentLength64 = body.Length;
+                context.Response.OutputStream.Write(body, 0, body.Length);
+                context.Response.Close();
+            }
+            catch (Exception)
+            {
+                // Client may have disconnected.
+            }
+        }
+
+        /// <summary>maxRequestLength (KB) from system.web/httpRuntime, as bytes.</summary>
+        private static long ReadMaxRequestBytes()
+        {
+            const long DefaultKb = 4096;
+            try
+            {
+                System.Web.Configuration.HttpRuntimeSection section =
+                    System.Web.Configuration.WebConfigurationManager.GetSection("system.web/httpRuntime")
+                        as System.Web.Configuration.HttpRuntimeSection;
+                return (section != null ? section.MaxRequestLength : DefaultKb) * 1024L;
+            }
+            catch (Exception)
+            {
+                return DefaultKb * 1024L;
             }
         }
 
@@ -317,19 +380,9 @@ namespace HearthPortableWebServer.Hosting
 
         private static void TryWriteError(HttpListenerContext context, Exception ex)
         {
-            try
-            {
-                context.Response.StatusCode = 500;
-                byte[] body = System.Text.Encoding.UTF8.GetBytes(
-                    "500 Internal Server Error\r\n" + ex.Message);
-                context.Response.OutputStream.Write(body, 0, body.Length);
-                context.Response.OutputStream.Close();
-                context.Response.Close();
-            }
-            catch (Exception)
-            {
-                // Nothing more we can do for this connection.
-            }
+            // Log the details server-side; never echo exception text to the client.
+            System.Diagnostics.Trace.TraceError("HearthPortableWebServer request failed: " + ex);
+            WriteStatus(context, 500, "Internal Server Error");
         }
 
         public void Stop()
