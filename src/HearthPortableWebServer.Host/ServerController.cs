@@ -92,6 +92,14 @@ namespace HearthPortableWebServer.Host
             try
             {
                 string dest = Path.Combine(targetDir, Path.GetFileName(sourceFile));
+
+                // Rewriting bin fires a change notification that ASP.NET can receive while the
+                // new AppDomain is still initializing, unloading it. Skip identical copies.
+                if (IsSameFile(sourceFile, dest))
+                {
+                    return;
+                }
+
                 File.Copy(sourceFile, dest, true);
             }
             catch (IOException)
@@ -101,6 +109,32 @@ namespace HearthPortableWebServer.Host
             catch (UnauthorizedAccessException)
             {
             }
+        }
+
+        private static bool IsSameFile(string source, string dest)
+        {
+            if (!File.Exists(dest))
+            {
+                return false;
+            }
+
+            var s = new FileInfo(source);
+            var d = new FileInfo(dest);
+            if (s.Length != d.Length)
+            {
+                return false;
+            }
+
+            byte[] a = File.ReadAllBytes(source);
+            byte[] b = File.ReadAllBytes(dest);
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (a[i] != b[i])
+                {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 }
