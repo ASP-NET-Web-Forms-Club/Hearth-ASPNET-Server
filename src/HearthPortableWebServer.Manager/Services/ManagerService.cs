@@ -22,6 +22,10 @@ namespace HearthPortableWebServer.Manager.Services
         {
             _stopping = false;
 
+            // Ensure interactive users in Session 1+ can read/write shared state files
+            // (manager_sites.json, manual_stopped.txt, tracked_processes.txt) created by LocalSystem.
+            ProcessSupervisor.EnsureFolderPermissions(ManagerConfig.GetAppDirectory());
+
             // Fresh boot / service launch: manual stops were temporary, honour AutoStart again.
             ManagerConfig.ClearManualStops();
 
@@ -66,7 +70,16 @@ namespace HearthPortableWebServer.Manager.Services
                     foreach (SiteEntry site in config.Sites)
                     {
                         if (_stopping) break;
-                        if (manualStops.Contains(site.Port)) continue;
+                        if (manualStops.Contains(site.Port))
+                        {
+                            // A non-elevated Manager UI cannot terminate a Session 0 (SYSTEM) child process
+                            // directly, so if the user marked this port as manually stopped, stop it here.
+                            if (ProcessSupervisor.IsRunning(site.Port))
+                            {
+                                ProcessSupervisor.StopSite(site.Port);
+                            }
+                            continue;
+                        }
                         if (site.AutoStart && !ProcessSupervisor.IsRunning(site.Port))
                         {
                             string err;
@@ -76,7 +89,7 @@ namespace HearthPortableWebServer.Manager.Services
                 }
                 catch { }
 
-                for (int i = 0; i < 50 && !_stopping; i++)
+                for (int i = 0; i < 10 && !_stopping; i++)
                 {
                     Thread.Sleep(100);
                 }

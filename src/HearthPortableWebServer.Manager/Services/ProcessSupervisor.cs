@@ -297,6 +297,35 @@ namespace HearthPortableWebServer.Manager.Services
             psi.EnvironmentVariables["PORT"] = site.Port.ToString(CultureInfo.InvariantCulture);
             psi.EnvironmentVariables["HTTP_PLATFORM_PORT"] = site.Port.ToString(CultureInfo.InvariantCulture);
 
+            // Prepend the resolved runtime directory (and local node_modules\.bin if present)
+            // to the child process PATH so sibling tools (npm, pip, etc.) resolve automatically.
+            try
+            {
+                List<string> pathAdditions = new List<string>();
+                if (Path.IsPathRooted(exe))
+                {
+                    string exeDir = Path.GetDirectoryName(exe);
+                    if (!string.IsNullOrEmpty(exeDir) && Directory.Exists(exeDir))
+                    {
+                        pathAdditions.Add(exeDir);
+                    }
+                }
+                if (string.Equals(engine, "Node.js", StringComparison.OrdinalIgnoreCase))
+                {
+                    string localNodeBin = Path.Combine(resolvedRoot, "node_modules", ".bin");
+                    if (Directory.Exists(localNodeBin))
+                    {
+                        pathAdditions.Add(localNodeBin);
+                    }
+                }
+                if (pathAdditions.Count > 0)
+                {
+                    string existingPath = psi.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                    psi.EnvironmentVariables["PATH"] = string.Join(";", pathAdditions.ToArray()) + ";" + existingPath;
+                }
+            }
+            catch { }
+
             if (string.Equals(engine, ".NET Core", StringComparison.OrdinalIgnoreCase))
             {
                 psi.EnvironmentVariables["ASPNETCORE_URLS"] = "http://localhost:" + site.Port;
@@ -384,13 +413,35 @@ namespace HearthPortableWebServer.Manager.Services
 
         private static string ResolveExecutable(SiteEntry site, string resolvedRoot)
         {
+            string appDir = ManagerConfig.GetAppDirectory();
+
+            // 1. Check explicitly configured executable in site settings first
             if (!string.IsNullOrWhiteSpace(site.Executable))
             {
                 string exp = Environment.ExpandEnvironmentVariables(site.Executable.Trim());
-                if (Path.IsPathRooted(exp) && File.Exists(exp)) return exp;
-                string inRoot = Path.Combine(resolvedRoot, exp);
-                if (File.Exists(inRoot)) return inRoot;
-                return exp; // Return command name to let OS PATH resolve it
+                try
+                {
+                    if (Path.IsPathRooted(exp))
+                    {
+                        if (File.Exists(exp)) return Path.GetFullPath(exp);
+                    }
+                    else
+                    {
+                        string inAppDir = Path.GetFullPath(Path.Combine(appDir, exp));
+                        if (File.Exists(inAppDir)) return inAppDir;
+
+                        string inRoot = Path.GetFullPath(Path.Combine(resolvedRoot, exp));
+                        if (File.Exists(inRoot)) return inRoot;
+                    }
+                }
+                catch { }
+
+                // If explicit command name has no path separators (e.g. "python3"), let OS PATH resolve it;
+                // otherwise fall through to bundled runtime & system PATH discovery below.
+                if (exp.IndexOf(Path.DirectorySeparatorChar) < 0 && exp.IndexOf(Path.AltDirectorySeparatorChar) < 0)
+                {
+                    return exp;
+                }
             }
 
             string engine = site.Engine ?? "Other";
@@ -419,6 +470,9 @@ namespace HearthPortableWebServer.Manager.Services
                 }
                 catch { }
 
+                string bundledDotnet = Path.Combine(appDir, "runtimes", "dotnet", "dotnet.exe");
+                if (File.Exists(bundledDotnet)) return bundledDotnet;
+
                 return "dotnet";
             }
 
@@ -430,16 +484,31 @@ namespace HearthPortableWebServer.Manager.Services
                 string venv2 = Path.Combine(resolvedRoot, "venv", "Scripts", "python.exe");
                 if (File.Exists(venv2)) return venv2;
 
+                // Scan bundled runtime
+                string bundledPython = Path.Combine(appDir, "runtimes", "python", "python.exe");
+                if (File.Exists(bundledPython)) return bundledPython;
+
+                // Fall back to system PATH
                 return "python";
             }
 
             if (string.Equals(engine, "Node.js", StringComparison.OrdinalIgnoreCase))
             {
+                // Scan bundled runtime
+                string bundledNode = Path.Combine(appDir, "runtimes", "node", "node.exe");
+                if (File.Exists(bundledNode)) return bundledNode;
+
+                // Fall back to system PATH
                 return "node";
             }
 
             if (string.Equals(engine, "PHP", StringComparison.OrdinalIgnoreCase))
             {
+                // Scan bundled runtime
+                string bundledPhp = Path.Combine(appDir, "runtimes", "php", "php.exe");
+                if (File.Exists(bundledPhp)) return bundledPhp;
+
+                // Fall back to system PATH
                 return "php";
             }
 
@@ -477,7 +546,10 @@ namespace HearthPortableWebServer.Manager.Services
             {
                 KillProcessTree(persistedPid);
             }
-            RemovePersisted(port);
+            if (GetPersistedPid(port) == 0)
+            {
+                RemovePersisted(port);
+            }
 
             // Wait for the ASP.NET host to honour the graceful shutdown signal
             for (int i = 0; i < 25; i++)
