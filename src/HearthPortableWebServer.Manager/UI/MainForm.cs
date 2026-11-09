@@ -540,6 +540,14 @@ namespace HearthPortableWebServer.Manager.UI
             RefreshAllStatus();
         }
 
+        private void btnPathSetup_Click(object sender, EventArgs e)
+        {
+            using (SystemPathSetupForm form = new SystemPathSetupForm())
+            {
+                form.ShowDialog(this);
+            }
+        }
+
         private void trayIcon_DoubleClick(object sender, EventArgs e)
         {
             RestoreFromTray();

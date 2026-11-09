@@ -55,6 +55,13 @@
       <SubType>Component</SubType>
     </Compile>
     <Compile Include="Services\SiteWatcherManager.cs" />
+    <Compile Include="Services\PathEnvironmentHelper.cs" />
+    <Compile Include="UI\SystemPathSetupForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\SystemPathSetupForm.Designer.cs">
+      <DependentUpon>SystemPathSetupForm.cs</DependentUpon>
+    </Compile>
     <Compile Include="UI\ServiceSetupForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -90,6 +97,9 @@
     </EmbeddedResource>
     <EmbeddedResource Include="UI\ServiceSetupForm.resx">
       <DependentUpon>ServiceSetupForm.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UI\SystemPathSetupForm.resx">
+      <DependentUpon>SystemPathSetupForm.cs</DependentUpon>
     </EmbeddedResource>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
