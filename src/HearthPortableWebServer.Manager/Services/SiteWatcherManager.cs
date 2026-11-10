@@ -147,7 +147,7 @@ namespace HearthPortableWebServer.Manager.Services
                     ProcessSupervisor.StopSite(site.Port);
                     Thread.Sleep(300);
                     string err;
-                    ProcessSupervisor.StartSite(site, out err);
+                    ProcessSupervisor.StartSite(site, true, out err);
                 }
             }
             catch { }

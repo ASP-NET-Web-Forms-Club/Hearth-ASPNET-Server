@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -29,6 +30,19 @@ namespace HearthPortableWebServer.Manager.UI
                 }
             }
 
+            // "About" button, right-aligned on the toolbar.
+            ToolStripButton btnAbout = new ToolStripButton("ⓘ About");
+            btnAbout.Name = "btnAbout";
+            btnAbout.Alignment = ToolStripItemAlignment.Right;
+            btnAbout.Click += (s, e) =>
+            {
+                using (AboutForm about = new AboutForm(this.Icon))
+                {
+                    about.ShowDialog(this);
+                }
+            };
+            this.toolStrip.Items.Add(btnAbout);
+
             _windowSaveTimer = new System.Windows.Forms.Timer();
             _windowSaveTimer.Interval = 3000;
             _windowSaveTimer.Tick += WindowSaveTimer_Tick;
@@ -41,6 +55,8 @@ namespace HearthPortableWebServer.Manager.UI
             LoadWindowLayout();
 
             _config = ManagerConfig.Load();
+            // Clean up processes left over from sites that were deleted or re-configured.
+            ProcessSupervisor.StopOrphans(_config.Sites);
             PopulateSiteList();
 
             if (lvSites.Items.Count > 0)
@@ -396,6 +412,20 @@ namespace HearthPortableWebServer.Manager.UI
                     "Port In Use", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
+            // If anything that defines the running process changes, stop whatever Hearth may still
+            // have running for the old settings first. Otherwise the old process (e.g. PHP on the
+            // old port) is left orphaned and invisible in the list.
+            bool processSettingsChanged =
+                _selectedSite.Port != port ||
+                !string.Equals(_selectedSite.Engine ?? "", engine, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(_selectedSite.Root ?? "", root, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(_selectedSite.Script ?? "", script, StringComparison.Ordinal) ||
+                !string.Equals(_selectedSite.Executable ?? "", exe, StringComparison.OrdinalIgnoreCase);
+            if (processSettingsChanged)
+            {
+                ProcessSupervisor.StopSite(_selectedSite.Port);
+            }
+
             _selectedSite.Name = name;
             _selectedSite.Engine = engine;
             _selectedSite.Port = port;
@@ -486,6 +516,9 @@ namespace HearthPortableWebServer.Manager.UI
 
             if (confirm == DialogResult.Yes)
             {
+                // Make sure nothing Hearth started for this port survives the entry being removed.
+                ProcessSupervisor.StopSite(_selectedSite.Port);
+                ManagerConfig.SetManuallyStopped(_selectedSite.Port, false);
                 _config.Sites.Remove(_selectedSite);
                 _config.Save();
 
@@ -512,8 +545,17 @@ namespace HearthPortableWebServer.Manager.UI
         private void btnStartAll_Click(object sender, EventArgs e)
         {
             ManagerConfig.ClearManualStops();
-            ProcessSupervisor.StartAll(_config.Sites);
+            List<string> errors = new List<string>();
+            Cursor = Cursors.WaitCursor;
+            try { ProcessSupervisor.StartAll(_config.Sites, false, errors); }
+            finally { Cursor = Cursors.Default; }
             RefreshAllStatus();
+            if (errors.Count > 0)
+            {
+                MessageBox.Show(this, "Some sites could not be started:" + Environment.NewLine + Environment.NewLine +
+                    string.Join(Environment.NewLine + Environment.NewLine, errors.ToArray()),
+                    "Start All", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         private void btnStopAll_Click(object sender, EventArgs e)

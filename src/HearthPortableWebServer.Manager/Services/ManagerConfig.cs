@@ -113,7 +113,9 @@ namespace HearthPortableWebServer.Manager.Services
                     string json = File.ReadAllText(path, Encoding.UTF8);
                     JavaScriptSerializer serializer = new JavaScriptSerializer();
                     List<SiteEntry> loaded = serializer.Deserialize<List<SiteEntry>>(json);
-                    if (loaded != null && loaded.Count > 0)
+                    // An existing file with an empty list ("[]") means the user deleted every site.
+                    // Respect that; only seed a default site when no config file exists yet.
+                    if (loaded != null)
                     {
                         bool needsResave = false;
                         foreach (SiteEntry s in loaded)

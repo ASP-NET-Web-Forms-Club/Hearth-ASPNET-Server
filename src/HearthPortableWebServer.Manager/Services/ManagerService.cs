@@ -67,6 +67,11 @@ namespace HearthPortableWebServer.Manager.Services
                 {
                     ManagerConfig config = ManagerConfig.Load();
                     System.Collections.Generic.HashSet<int> manualStops = ManagerConfig.LoadManualStops();
+
+                    // Stop children on ports that are no longer configured (site deleted or its
+                    // port/engine changed). The service can kill Session 0 children the UI cannot.
+                    ProcessSupervisor.StopOrphans(config.Sites);
+
                     foreach (SiteEntry site in config.Sites)
                     {
                         if (_stopping) break;
@@ -83,7 +88,8 @@ namespace HearthPortableWebServer.Manager.Services
                         if (site.AutoStart && !ProcessSupervisor.IsRunning(site.Port))
                         {
                             string err;
-                            ProcessSupervisor.StartSite(site, out err);
+                            // Automatic: skipped silently once this site's runtime is known to be missing.
+                            ProcessSupervisor.StartSite(site, true, out err);
                         }
                     }
                 }

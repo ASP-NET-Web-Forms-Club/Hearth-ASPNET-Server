@@ -69,42 +69,95 @@ namespace HearthPortableWebServer.Manager.Services
         private const string TrackedFileName = "tracked_processes.txt";
         private static readonly object _fileLock = new object();
 
+        // The UI (user) and the service (LocalSystem) both read-modify-write the tracked file,
+        // so an in-process lock is not enough. A Global named mutex, open to all users,
+        // serialises access across processes and sessions.
+        private const string TrackedMutexName = @"Global\HearthPortableWebServer.TrackedProcesses";
+
+        private static Mutex OpenTrackedMutex()
+        {
+            try
+            {
+                MutexSecurity sec = new MutexSecurity();
+                sec.AddAccessRule(new MutexAccessRule(
+                    new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                    MutexRights.Synchronize | MutexRights.Modify,
+                    AccessControlType.Allow));
+                bool created;
+                return new Mutex(false, TrackedMutexName, out created, sec);
+            }
+            catch
+            {
+                try { return Mutex.OpenExisting(TrackedMutexName); } catch { return null; }
+            }
+        }
+
+        /// <summary>Runs an action on the tracked file under both the in-process and the cross-process lock.</summary>
+        private static void WithTrackedFileLock(Action action)
+        {
+            lock (_fileLock)
+            {
+                Mutex m = OpenTrackedMutex();
+                bool owned = false;
+                try
+                {
+                    if (m != null)
+                    {
+                        try { owned = m.WaitOne(5000); }
+                        catch (AbandonedMutexException) { owned = true; }
+                    }
+                    action();
+                }
+                finally
+                {
+                    if (m != null)
+                    {
+                        if (owned) { try { m.ReleaseMutex(); } catch { } }
+                        m.Dispose();
+                    }
+                }
+            }
+        }
+
         private static string TrackedFilePath()
         {
             return Path.Combine(ManagerConfig.GetAppDirectory(), TrackedFileName);
         }
 
-        private static Dictionary<int, KeyValuePair<int, string>> LoadPersisted()
+        // Caller must hold WithTrackedFileLock.
+        private static Dictionary<int, KeyValuePair<int, string>> ReadPersistedUnlocked()
         {
             Dictionary<int, KeyValuePair<int, string>> map = new Dictionary<int, KeyValuePair<int, string>>();
-            lock (_fileLock)
+            try
             {
-                try
+                string path = TrackedFilePath();
+                if (!File.Exists(path)) return map;
+                foreach (string line in File.ReadAllLines(path))
                 {
-                    string path = TrackedFilePath();
-                    if (!File.Exists(path)) return map;
-                    foreach (string line in File.ReadAllLines(path))
+                    string[] parts = line.Split('|');
+                    int port, pid;
+                    if (parts.Length >= 3 && int.TryParse(parts[0], out port) && int.TryParse(parts[1], out pid))
                     {
-                        string[] parts = line.Split('|');
-                        int port, pid;
-                        if (parts.Length >= 3 && int.TryParse(parts[0], out port) && int.TryParse(parts[1], out pid))
-                        {
-                            map[port] = new KeyValuePair<int, string>(pid, parts[2]);
-                        }
+                        map[port] = new KeyValuePair<int, string>(pid, parts[2]);
                     }
                 }
-                catch { }
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning("Hearth: failed to read " + TrackedFileName + ": " + ex.Message);
             }
             return map;
         }
 
-        private static void SavePersisted(Dictionary<int, KeyValuePair<int, string>> map)
+        // Caller must hold WithTrackedFileLock. Retries briefly so a transient sharing
+        // violation does not silently drop a PID (which would orphan that process).
+        private static void WritePersistedUnlocked(Dictionary<int, KeyValuePair<int, string>> map)
         {
-            lock (_fileLock)
+            string path = TrackedFilePath();
+            for (int attempt = 0; attempt < 5; attempt++)
             {
                 try
                 {
-                    string path = TrackedFilePath();
                     if (map.Count == 0)
                     {
                         if (File.Exists(path)) File.Delete(path);
@@ -116,26 +169,77 @@ namespace HearthPortableWebServer.Manager.Services
                         lines.Add(kv.Key + "|" + kv.Value.Key + "|" + kv.Value.Value);
                     }
                     File.WriteAllLines(path, lines.ToArray());
+                    return;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    if (attempt == 4)
+                    {
+                        Trace.TraceError("Hearth: failed to write " + TrackedFileName + ": " + ex.Message);
+                        return;
+                    }
+                    Thread.Sleep(100);
+                }
             }
+        }
+
+        private static Dictionary<int, KeyValuePair<int, string>> LoadPersisted()
+        {
+            Dictionary<int, KeyValuePair<int, string>> map = null;
+            WithTrackedFileLock(() => { map = ReadPersistedUnlocked(); });
+            return map ?? new Dictionary<int, KeyValuePair<int, string>>();
         }
 
         private static void PersistPid(int port, Process proc)
         {
             try
             {
-                Dictionary<int, KeyValuePair<int, string>> map = LoadPersisted();
-                map[port] = new KeyValuePair<int, string>(proc.Id, proc.ProcessName);
-                SavePersisted(map);
+                int pid = proc.Id;
+                string name = proc.ProcessName;
+                WithTrackedFileLock(() =>
+                {
+                    Dictionary<int, KeyValuePair<int, string>> map = ReadPersistedUnlocked();
+                    map[port] = new KeyValuePair<int, string>(pid, name);
+                    WritePersistedUnlocked(map);
+                });
             }
             catch { }
         }
 
         private static void RemovePersisted(int port)
         {
-            Dictionary<int, KeyValuePair<int, string>> map = LoadPersisted();
-            if (map.Remove(port)) SavePersisted(map);
+            WithTrackedFileLock(() =>
+            {
+                Dictionary<int, KeyValuePair<int, string>> map = ReadPersistedUnlocked();
+                if (map.Remove(port)) WritePersistedUnlocked(map);
+            });
+        }
+
+        /// <summary>
+        /// Stops every process Hearth started (tracked on disk or in memory) whose port is no
+        /// longer assigned to any configured site — e.g. after a site was deleted or its port/engine changed.
+        /// </summary>
+        public static void StopOrphans(IEnumerable<SiteEntry> sites)
+        {
+            HashSet<int> configured = new HashSet<int>();
+            if (sites != null)
+            {
+                foreach (SiteEntry s in sites) configured.Add(s.Port);
+            }
+
+            HashSet<int> ports = new HashSet<int>(LoadPersisted().Keys);
+            lock (_procLock)
+            {
+                foreach (int p in _trackedProcesses.Keys) ports.Add(p);
+            }
+
+            foreach (int port in ports)
+            {
+                if (!configured.Contains(port))
+                {
+                    StopSite(port);
+                }
+            }
         }
 
         /// <summary>Returns the PID of a still-alive process Hearth started for this port, or 0.</summary>
@@ -191,12 +295,69 @@ namespace HearthPortableWebServer.Manager.Services
             return IsPortListening(port);
         }
 
+        // ---- Missing-runtime memory (in-process only) ----
+        // When a site's runtime (PHP / Python / Node.js / .NET) cannot be found, remember it so
+        // silent auto-start / auto-restart does not retry it on every watchdog tick. The key
+        // includes engine + executable, so changing the site's configuration re-evaluates it.
+        // A manual Start from the UI always retries.
+        private static readonly HashSet<string> _missingRuntime = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object _missingLock = new object();
+
+        private static string RuntimeKey(SiteEntry site)
+        {
+            return site.Port.ToString(CultureInfo.InvariantCulture) + "|" + (site.Engine ?? "") + "|" + (site.Executable ?? "").Trim();
+        }
+
+        public static bool IsRuntimeMissing(SiteEntry site)
+        {
+            if (site == null) return false;
+            lock (_missingLock) { return _missingRuntime.Contains(RuntimeKey(site)); }
+        }
+
+        private static void SetRuntimeMissing(SiteEntry site, bool missing)
+        {
+            lock (_missingLock)
+            {
+                if (missing) _missingRuntime.Add(RuntimeKey(site));
+                else _missingRuntime.Remove(RuntimeKey(site));
+            }
+        }
+
+        private static string RuntimeDisplayName(string engine)
+        {
+            if (string.Equals(engine, ".NET Core", StringComparison.OrdinalIgnoreCase)) return ".NET";
+            return string.IsNullOrEmpty(engine) ? "runtime" : engine;
+        }
+
+        private static string MissingRuntimeMessage(string engine)
+        {
+            return "No " + RuntimeDisplayName(engine) + " runtime found." + Environment.NewLine + Environment.NewLine +
+                   "Please download the full Hearth package with PHP / Python / Node.js runtimes bundled, " +
+                   "or install the runtime and set its path in the site's Executable field.";
+        }
+
+        /// <summary>Manual start (e.g. the Start Server button): always attempts, even if the runtime was missing before.</summary>
         public static bool StartSite(SiteEntry site, out string errorMessage)
+        {
+            return StartSite(site, false, out errorMessage);
+        }
+
+        /// <summary>
+        /// Starts a site. When <paramref name="automatic"/> is true (service watchdog, Start All on boot,
+        /// live reload), a site whose runtime is already known to be missing is skipped silently.
+        /// </summary>
+        public static bool StartSite(SiteEntry site, bool automatic, out string errorMessage)
         {
             errorMessage = null;
             if (site == null)
             {
                 errorMessage = "Site configuration is null.";
+                return false;
+            }
+
+            if (automatic && IsRuntimeMissing(site))
+            {
+                errorMessage = MissingRuntimeMessage(site.Engine);
                 return false;
             }
 
@@ -281,9 +442,11 @@ namespace HearthPortableWebServer.Manager.Services
 
             if (string.IsNullOrEmpty(exe))
             {
-                errorMessage = "Executable could not be found for engine '" + engine + "'. Please specify executable path in Configuration.";
+                SetRuntimeMissing(site, true);
+                errorMessage = MissingRuntimeMessage(engine);
                 return false;
             }
+            SetRuntimeMissing(site, false);
 
             ProcessStartInfo psi = new ProcessStartInfo
             {
@@ -404,11 +567,52 @@ namespace HearthPortableWebServer.Manager.Services
 
                 return IsPortListening(site.Port);
             }
+            catch (System.ComponentModel.Win32Exception wex) when (wex.NativeErrorCode == 2 || wex.NativeErrorCode == 3)
+            {
+                // ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND: the runtime executable is not there.
+                SetRuntimeMissing(site, true);
+                errorMessage = MissingRuntimeMessage(engine);
+                return false;
+            }
             catch (Exception ex)
             {
                 errorMessage = "Execution error: " + ex.Message;
                 return false;
             }
+        }
+
+        /// <summary>Finds a bare command name (e.g. "php") on the system PATH, honouring PATHEXT. Returns null if absent.</summary>
+        private static string FindOnPath(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command)) return null;
+            try
+            {
+                List<string> names = new List<string>();
+                if (Path.HasExtension(command)) names.Add(command);
+                string pathExt = Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
+                foreach (string ext in pathExt.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    names.Add(command + ext);
+                }
+
+                string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                foreach (string dir in path.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string d = dir.Trim().Trim('"');
+                    if (d.Length == 0) continue;
+                    foreach (string n in names)
+                    {
+                        try
+                        {
+                            string candidate = Path.Combine(d, n);
+                            if (File.Exists(candidate)) return candidate;
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         private static string ResolveExecutable(SiteEntry site, string resolvedRoot)
@@ -440,7 +644,8 @@ namespace HearthPortableWebServer.Manager.Services
                 // otherwise fall through to bundled runtime & system PATH discovery below.
                 if (exp.IndexOf(Path.DirectorySeparatorChar) < 0 && exp.IndexOf(Path.AltDirectorySeparatorChar) < 0)
                 {
-                    return exp;
+                    string onPath = FindOnPath(exp);
+                    if (onPath != null) return onPath;
                 }
             }
 
@@ -473,7 +678,7 @@ namespace HearthPortableWebServer.Manager.Services
                 string bundledDotnet = Path.Combine(appDir, "runtimes", "dotnet", "dotnet.exe");
                 if (File.Exists(bundledDotnet)) return bundledDotnet;
 
-                return "dotnet";
+                return FindOnPath("dotnet");
             }
 
             if (string.Equals(engine, "Python", StringComparison.OrdinalIgnoreCase))
@@ -488,8 +693,8 @@ namespace HearthPortableWebServer.Manager.Services
                 string bundledPython = Path.Combine(appDir, "runtimes", "python", "python.exe");
                 if (File.Exists(bundledPython)) return bundledPython;
 
-                // Fall back to system PATH
-                return "python";
+                // Fall back to system PATH (null if not installed)
+                return FindOnPath("python");
             }
 
             if (string.Equals(engine, "Node.js", StringComparison.OrdinalIgnoreCase))
@@ -498,8 +703,8 @@ namespace HearthPortableWebServer.Manager.Services
                 string bundledNode = Path.Combine(appDir, "runtimes", "node", "node.exe");
                 if (File.Exists(bundledNode)) return bundledNode;
 
-                // Fall back to system PATH
-                return "node";
+                // Fall back to system PATH (null if not installed)
+                return FindOnPath("node");
             }
 
             if (string.Equals(engine, "PHP", StringComparison.OrdinalIgnoreCase))
@@ -508,8 +713,8 @@ namespace HearthPortableWebServer.Manager.Services
                 string bundledPhp = Path.Combine(appDir, "runtimes", "php", "php.exe");
                 if (File.Exists(bundledPhp)) return bundledPhp;
 
-                // Fall back to system PATH
-                return "php";
+                // Fall back to system PATH (null if not installed)
+                return FindOnPath("php");
             }
 
             return site.Executable ?? string.Empty;
@@ -629,13 +834,26 @@ namespace HearthPortableWebServer.Manager.Services
             return 0;
         }
 
+        /// <summary>Automatic start of all sites (e.g. --start-all): skips sites whose runtime is known missing.</summary>
         public static void StartAll(IEnumerable<SiteEntry> sites)
+        {
+            StartAll(sites, true, null);
+        }
+
+        /// <summary>
+        /// Starts all sites. Manual (automatic = false) always retries; any per-site errors are
+        /// collected into <paramref name="errors"/> when provided.
+        /// </summary>
+        public static void StartAll(IEnumerable<SiteEntry> sites, bool automatic, List<string> errors)
         {
             if (sites == null) return;
             foreach (SiteEntry s in sites)
             {
                 string err;
-                StartSite(s, out err);
+                if (!StartSite(s, automatic, out err) && errors != null && !string.IsNullOrEmpty(err))
+                {
+                    errors.Add(s.Name + " (port " + s.Port + "): " + err);
+                }
             }
         }
 
@@ -646,6 +864,8 @@ namespace HearthPortableWebServer.Manager.Services
             {
                 StopSite(s.Port);
             }
+            // Also stop anything Hearth started on ports no longer in the config.
+            StopOrphans(sites);
         }
 
         public static void OpenBrowser(int port)
