@@ -72,10 +72,14 @@ namespace HearthPortableWebServer.Manager.Services
         // The UI (user) and the service (LocalSystem) both read-modify-write the tracked file,
         // so an in-process lock is not enough. A Global named mutex, open to all users,
         // serialises access across processes and sessions.
-        private const string TrackedMutexName = @"Global\HearthPortableWebServer.TrackedProcesses";
+        private static string TrackedMutexName()
+        {
+            return @"Global\HearthPortableWebServer.TrackedProcesses_" + ManagerConfig.GetInstanceId();
+        }
 
         private static Mutex OpenTrackedMutex()
         {
+            string mutexName = TrackedMutexName();
             try
             {
                 MutexSecurity sec = new MutexSecurity();
@@ -84,11 +88,11 @@ namespace HearthPortableWebServer.Manager.Services
                     MutexRights.Synchronize | MutexRights.Modify,
                     AccessControlType.Allow));
                 bool created;
-                return new Mutex(false, TrackedMutexName, out created, sec);
+                return new Mutex(false, mutexName, out created, sec);
             }
             catch
             {
-                try { return Mutex.OpenExisting(TrackedMutexName); } catch { return null; }
+                try { return Mutex.OpenExisting(mutexName); } catch { return null; }
             }
         }
 
@@ -252,9 +256,24 @@ namespace HearthPortableWebServer.Manager.Services
             {
                 using (Process p = Process.GetProcessById(entry.Key))
                 {
-                    // Guard against PID reuse by checking the process name too.
-                    if (!p.HasExited && string.Equals(p.ProcessName, entry.Value, StringComparison.OrdinalIgnoreCase))
+                    // Guard against PID reuse by checking the process name first
+                    // (ProcessName is readable without PROCESS_QUERY_INFORMATION).
+                    if (!string.Equals(p.ProcessName, entry.Value, StringComparison.OrdinalIgnoreCase))
                     {
+                        return 0;
+                    }
+
+                    try
+                    {
+                        if (!p.HasExited)
+                        {
+                            return entry.Key;
+                        }
+                    }
+                    catch (System.ComponentModel.Win32Exception)
+                    {
+                        // Non-elevated caller querying a LocalSystem / elevated child process:
+                        // GetProcessById succeeded and ProcessName matched, so the process is alive.
                         return entry.Key;
                     }
                 }

@@ -49,6 +49,7 @@
   <ItemGroup>
     <Compile Include="Models\SiteEntry.cs" />
     <Compile Include="Services\ManagerConfig.cs" />
+    <Compile Include="Services\ManagerIpc.cs" />
     <Compile Include="Services\ProcessSupervisor.cs" />
     <Compile Include="Services\ServiceControllerHelper.cs" />
     <Compile Include="Services\ManagerService.cs">

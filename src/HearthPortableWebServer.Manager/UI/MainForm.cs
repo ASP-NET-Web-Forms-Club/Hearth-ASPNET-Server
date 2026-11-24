@@ -15,6 +15,8 @@ namespace HearthPortableWebServer.Manager.UI
         private bool _isClosingExplicit;
         private System.Windows.Forms.Timer _windowSaveTimer;
         private bool _isLoaded;
+        private bool _serviceConnected;
+        private Dictionary<int, ManagerIpc.SiteStatusDto> _serviceStatuses;
 
         public MainForm()
         {
@@ -55,8 +57,17 @@ namespace HearthPortableWebServer.Manager.UI
             LoadWindowLayout();
 
             _config = ManagerConfig.Load();
+            // Query the Windows Service first if it is running for this folder.
+            PollServiceStatus();
             // Clean up processes left over from sites that were deleted or re-configured.
-            ProcessSupervisor.StopOrphans(_config.Sites);
+            if (_serviceConnected)
+            {
+                ManagerIpcClient.TryStopOrphans();
+            }
+            else
+            {
+                ProcessSupervisor.StopOrphans(_config.Sites);
+            }
             PopulateSiteList();
 
             if (lvSites.Items.Count > 0)
@@ -110,8 +121,46 @@ namespace HearthPortableWebServer.Manager.UI
             RefreshAllStatus();
         }
 
+        private void PollServiceStatus()
+        {
+            ManagerIpc.IpcResponse resp = ManagerIpcClient.TryGetStatus();
+            if (resp != null && resp.Ok)
+            {
+                _serviceConnected = true;
+                Dictionary<int, ManagerIpc.SiteStatusDto> map = new Dictionary<int, ManagerIpc.SiteStatusDto>();
+                if (resp.Sites != null)
+                {
+                    foreach (ManagerIpc.SiteStatusDto dto in resp.Sites)
+                    {
+                        map[dto.Port] = dto;
+                    }
+                }
+                _serviceStatuses = map;
+            }
+            else
+            {
+                _serviceConnected = false;
+                _serviceStatuses = null;
+            }
+        }
+
+        private bool IsSiteRunning(int port)
+        {
+            if (_serviceConnected && _serviceStatuses != null)
+            {
+                ManagerIpc.SiteStatusDto dto;
+                if (_serviceStatuses.TryGetValue(port, out dto))
+                {
+                    return string.Equals(dto.State, "Running", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            return ProcessSupervisor.IsRunning(port);
+        }
+
         private void RefreshAllStatus()
         {
+            PollServiceStatus();
+
             int runningCount = 0;
             int stoppedCount = 0;
 
@@ -138,14 +187,39 @@ namespace HearthPortableWebServer.Manager.UI
             lblStatusSummary.Text = string.Format("Total Sites: {0} | Running: {1} | Stopped: {2}",
                 _config.Sites.Count, runningCount, stoppedCount);
 
-            lblServiceStatus.Text = "Manager Service: " + ServiceControllerHelper.GetServiceStatusText();
+            lblServiceStatus.Text = _serviceConnected
+                ? "Manager Service: Running (Connected)"
+                : ("Manager Service: " + ServiceControllerHelper.GetServiceStatusText());
 
             UpdateActionButtonsState();
         }
 
         /// <summary>Returns true when Hearth is running the site; also yields the list status text/colour.</summary>
-        private static bool GetSiteStatus(SiteEntry site, out string statusText, out Color color)
+        private bool GetSiteStatus(SiteEntry site, out string statusText, out Color color)
         {
+            if (_serviceConnected && _serviceStatuses != null)
+            {
+                ManagerIpc.SiteStatusDto dto;
+                if (_serviceStatuses.TryGetValue(site.Port, out dto))
+                {
+                    if (string.Equals(dto.State, "Running", StringComparison.OrdinalIgnoreCase))
+                    {
+                        statusText = "● Running";
+                        color = Color.DarkGreen;
+                        return true;
+                    }
+                    if (string.Equals(dto.State, "PortInUse", StringComparison.OrdinalIgnoreCase))
+                    {
+                        statusText = "⚠ Port in use";
+                        color = Color.DarkOrange;
+                        return false;
+                    }
+                    statusText = "○ Stopped";
+                    color = Color.Maroon;
+                    return false;
+                }
+            }
+
             if (ProcessSupervisor.IsRunning(site.Port))
             {
                 statusText = "● Running";
@@ -175,7 +249,7 @@ namespace HearthPortableWebServer.Manager.UI
             grpDetails.Enabled = true;
             grpActions.Enabled = true;
 
-            bool isRunning = ProcessSupervisor.IsRunning(_selectedSite.Port);
+            bool isRunning = IsSiteRunning(_selectedSite.Port);
             btnStart.Enabled = !isRunning;
             btnStop.Enabled = isRunning;
 
@@ -242,7 +316,7 @@ namespace HearthPortableWebServer.Manager.UI
 
         private void cmbEngine_SelectedIndexChanged(object sender, EventArgs e)
         {
-            bool isRunning = _selectedSite != null && ProcessSupervisor.IsRunning(_selectedSite.Port);
+            bool isRunning = _selectedSite != null && IsSiteRunning(_selectedSite.Port);
             UpdateEngineUiState(!isRunning);
 
             string selectedEngine = cmbEngine.SelectedItem != null ? cmbEngine.SelectedItem.ToString() : "ASP.NET";
@@ -298,7 +372,7 @@ namespace HearthPortableWebServer.Manager.UI
             chkAutoStart.Checked = site.AutoStart;
             chkAutoRestart.Checked = site.AutoRestart;
 
-            bool isRunning = ProcessSupervisor.IsRunning(site.Port);
+            bool isRunning = IsSiteRunning(site.Port);
             UpdateEngineUiState(!isRunning);
         }
 
@@ -423,7 +497,14 @@ namespace HearthPortableWebServer.Manager.UI
                 !string.Equals(_selectedSite.Executable ?? "", exe, StringComparison.OrdinalIgnoreCase);
             if (processSettingsChanged)
             {
-                ProcessSupervisor.StopSite(_selectedSite.Port);
+                if (_serviceConnected)
+                {
+                    ManagerIpcClient.TryStopSiteForReconfig(_selectedSite.Port);
+                }
+                else
+                {
+                    ProcessSupervisor.StopSite(_selectedSite.Port);
+                }
             }
 
             _selectedSite.Name = name;
@@ -435,6 +516,11 @@ namespace HearthPortableWebServer.Manager.UI
             _selectedSite.AutoStart = autoStart;
             _selectedSite.AutoRestart = autoRestart;
             _config.Save();
+
+            if (_serviceConnected)
+            {
+                ManagerIpcClient.TryReload();
+            }
 
             txtRoot.Text = root;
 
@@ -457,10 +543,24 @@ namespace HearthPortableWebServer.Manager.UI
         {
             if (_selectedSite == null) return;
 
-            ManagerConfig.SetManuallyStopped(_selectedSite.Port, false);
+            string err = null;
+            bool ok;
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                if (_serviceConnected && ManagerIpcClient.TryStartSite(_selectedSite.Port, out ok, out err))
+                {
+                    // Handled by Windows Service over IPC
+                }
+                else
+                {
+                    ManagerConfig.SetManuallyStopped(_selectedSite.Port, false);
+                    ok = ProcessSupervisor.StartSite(_selectedSite, out err);
+                }
+            }
+            finally { Cursor = Cursors.Default; }
 
-            string err;
-            if (!ProcessSupervisor.StartSite(_selectedSite, out err))
+            if (!ok)
             {
                 MessageBox.Show(this, "Failed to start site '" + _selectedSite.Name + "':" + Environment.NewLine + (err ?? "Unknown error"),
                     "Start Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -472,17 +572,32 @@ namespace HearthPortableWebServer.Manager.UI
         {
             if (_selectedSite == null) return;
 
-            // Temporary stop: tell the service watchdog not to auto-restart this site.
-            // The AutoStart setting is kept and applies again on the next boot / service launch.
-            ManagerConfig.SetManuallyStopped(_selectedSite.Port, true);
-            ProcessSupervisor.StopSite(_selectedSite.Port);
+            Cursor = Cursors.WaitCursor;
+            try
+            {
+                bool ok;
+                string err;
+                if (_serviceConnected && ManagerIpcClient.TryStopSite(_selectedSite.Port, out ok, out err))
+                {
+                    // Handled by Windows Service over IPC
+                }
+                else
+                {
+                    // Temporary stop: tell the service watchdog not to auto-restart this site.
+                    // The AutoStart setting is kept and applies again on the next boot / service launch.
+                    ManagerConfig.SetManuallyStopped(_selectedSite.Port, true);
+                    ProcessSupervisor.StopSite(_selectedSite.Port);
+                }
+            }
+            finally { Cursor = Cursors.Default; }
+
             RefreshAllStatus();
         }
 
         private void btnBrowse_Click(object sender, EventArgs e)
         {
             if (_selectedSite == null) return;
-            if (!ProcessSupervisor.IsRunning(_selectedSite.Port))
+            if (!IsSiteRunning(_selectedSite.Port))
             {
                 if (MessageBox.Show(this, "The server is currently stopped. Open browser anyway?",
                     "Server Stopped", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -503,7 +618,7 @@ namespace HearthPortableWebServer.Manager.UI
         {
             if (_selectedSite == null) return;
 
-            if (ProcessSupervisor.IsRunning(_selectedSite.Port))
+            if (IsSiteRunning(_selectedSite.Port))
             {
                 MessageBox.Show(this, "Please stop the server before deleting this site entry.",
                     "Site is Running", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -516,11 +631,21 @@ namespace HearthPortableWebServer.Manager.UI
 
             if (confirm == DialogResult.Yes)
             {
-                // Make sure nothing Hearth started for this port survives the entry being removed.
-                ProcessSupervisor.StopSite(_selectedSite.Port);
-                ManagerConfig.SetManuallyStopped(_selectedSite.Port, false);
+                int deletedPort = _selectedSite.Port;
                 _config.Sites.Remove(_selectedSite);
                 _config.Save();
+
+                // Make sure nothing Hearth started for this port survives the entry being removed.
+                if (_serviceConnected)
+                {
+                    ManagerIpcClient.TryStopSiteForReconfig(deletedPort);
+                    ManagerIpcClient.TryReload();
+                }
+                else
+                {
+                    ProcessSupervisor.StopSite(deletedPort);
+                    ManagerConfig.SetManuallyStopped(deletedPort, false);
+                }
 
                 if (lvSites.SelectedItems.Count > 0)
                 {
@@ -544,10 +669,16 @@ namespace HearthPortableWebServer.Manager.UI
 
         private void btnStartAll_Click(object sender, EventArgs e)
         {
-            ManagerConfig.ClearManualStops();
             List<string> errors = new List<string>();
             Cursor = Cursors.WaitCursor;
-            try { ProcessSupervisor.StartAll(_config.Sites, false, errors); }
+            try
+            {
+                if (!(_serviceConnected && ManagerIpcClient.TryStartAll(out errors)))
+                {
+                    ManagerConfig.ClearManualStops();
+                    ProcessSupervisor.StartAll(_config.Sites, false, errors);
+                }
+            }
             finally { Cursor = Cursors.Default; }
             RefreshAllStatus();
             if (errors.Count > 0)
@@ -560,11 +691,19 @@ namespace HearthPortableWebServer.Manager.UI
 
         private void btnStopAll_Click(object sender, EventArgs e)
         {
-            foreach (SiteEntry s in _config.Sites)
+            Cursor = Cursors.WaitCursor;
+            try
             {
-                ManagerConfig.SetManuallyStopped(s.Port, true);
+                if (!(_serviceConnected && ManagerIpcClient.TryStopAll()))
+                {
+                    foreach (SiteEntry s in _config.Sites)
+                    {
+                        ManagerConfig.SetManuallyStopped(s.Port, true);
+                    }
+                    ProcessSupervisor.StopAll(_config.Sites);
+                }
             }
-            ProcessSupervisor.StopAll(_config.Sites);
+            finally { Cursor = Cursors.Default; }
             RefreshAllStatus();
         }
 
@@ -616,9 +755,9 @@ namespace HearthPortableWebServer.Manager.UI
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if (!_isClosingExplicit && e.CloseReason == CloseReason.UserClosing)
+            if (!_isClosingExplicit && e.CloseReason == CloseReason.UserClosing && !_serviceConnected)
             {
-                // Check if any servers are running
+                // Standalone (non-service) mode: check if any servers are running
                 bool anyRunning = false;
                 foreach (SiteEntry s in _config.Sites)
                 {

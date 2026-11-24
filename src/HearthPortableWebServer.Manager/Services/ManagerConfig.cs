@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
 using HearthPortableWebServer.Manager.Models;
@@ -35,6 +36,40 @@ namespace HearthPortableWebServer.Manager.Services
 
             string startup = AppDomain.CurrentDomain.BaseDirectory;
             return !string.IsNullOrEmpty(startup) ? startup : ".";
+        }
+
+        private static string _instanceId;
+
+        /// <summary>
+        /// Deterministic 16-hex-char identifier derived from this executable's normalized folder path.
+        /// Used to scope Named Pipe IPC, cross-process mutexes, and secondary service names so multiple
+        /// portable copies in different folders never collide.
+        /// </summary>
+        public static string GetInstanceId()
+        {
+            if (!string.IsNullOrEmpty(_instanceId)) return _instanceId;
+            try
+            {
+                string dir = Path.GetFullPath(GetAppDirectory())
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .ToLowerInvariant();
+                using (SHA256 sha = SHA256.Create())
+                {
+                    byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(dir));
+                    StringBuilder sb = new StringBuilder(16);
+                    for (int i = 0; i < 8; i++)
+                    {
+                        sb.Append(hash[i].ToString("x2"));
+                    }
+                    _instanceId = sb.ToString();
+                    return _instanceId;
+                }
+            }
+            catch
+            {
+                _instanceId = "default";
+                return _instanceId;
+            }
         }
 
         public static string ConfigPath()

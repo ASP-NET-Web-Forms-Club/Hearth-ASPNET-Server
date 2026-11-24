@@ -21,12 +21,19 @@ namespace HearthPortableWebServer.Manager
                 }
                 if (first == "--start-all" || first == "-start-all")
                 {
-                    ProcessSupervisor.StartAll(ManagerConfig.Load().Sites);
+                    System.Collections.Generic.List<string> ipcErrors;
+                    if (!ManagerIpcClient.TryStartAll(out ipcErrors))
+                    {
+                        ProcessSupervisor.StartAll(ManagerConfig.Load().Sites);
+                    }
                     return;
                 }
                 if (first == "--stop-all" || first == "-stop-all")
                 {
-                    ProcessSupervisor.StopAll(ManagerConfig.Load().Sites);
+                    if (!ManagerIpcClient.TryStopAll())
+                    {
+                        ProcessSupervisor.StopAll(ManagerConfig.Load().Sites);
+                    }
                     return;
                 }
             }
